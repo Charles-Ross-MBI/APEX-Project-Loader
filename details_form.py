@@ -22,6 +22,7 @@ def widget_key(name: str, version: int, is_awp: bool) -> str:
 def session_selectbox(
     key: str,
     label: str,
+    help: str,
     options: list,
     default_key: str = None,
     force_str: bool = False,
@@ -54,6 +55,7 @@ def session_selectbox(
         normalized_options,
         index=default_index,
         key=widget_key(key, version, is_awp),
+        help = help
     )
     return st.session_state[key]
 
@@ -255,18 +257,21 @@ def _render_original_form(is_awp: bool):
                     "AASHTOWare Project Name",
                     value=val("awp_proj_name", "awp_name"),
                     key=widget_key("awp_proj_name", version, is_awp),
+                    help="The name of the project as sourced from the AASHTOWare table.",
                 )
             with c2:
                 st.session_state["proj_name"] = st.text_input(
-                    "Public Project Name*",
+                    "Public Project Name ✱",
                     value=st.session_state.get("proj_name", ""),
                     key=widget_key("proj_name", version, is_awp),
+                    help="Provide the project name that will be displayed publicly.",
                 )
         else:
             st.session_state["proj_name"] = st.text_input(
-                "Public Project Name*",
+                "Public Project Name ✱",
                 value=st.session_state.get("proj_name", ""),
                 key=widget_key("proj_name", version, is_awp),
+                help="Provide the project name that will be displayed publicly.",
             )
         st.write("")
 
@@ -284,18 +289,20 @@ def _render_original_form(is_awp: bool):
             default_index = cy_options.index(current_cy_str) if current_cy_str in cy_options else 0
             current_cy = st.session_state.get("construction_year", cy_options[default_index])
             st.session_state["construction_year"] = st.selectbox(
-                "Construction Year*",
+                "Construction Year ✱",
                 cy_options,
                 index=default_index,
                 key=widget_key("construction_year", version, is_awp),
+                help="The project’s assigned year. Continuing projects must also receive a new year.",
             )
         with col2:
             phase_options = ['', "Planning", "Construction"]
             current_phase = st.session_state.get('phase', '')
             st.session_state["phase"] = st.selectbox(
-                "Phase*", phase_options,
+                "Phase ✱", phase_options,
                 index=(phase_options.index(current_phase) if current_phase in phase_options else 0),
                 key=widget_key("phase", version, is_awp),
+                help="Indicates the construction phase scheduled for this project in the current year.",
             )
 
         # Project Identifiers
@@ -326,7 +333,8 @@ def _render_original_form(is_awp: bool):
         with col13:
             st.session_state["fund_type"] = session_selectbox(
                 key="fund_type*",
-                label="Funding Type?",
+                label="Funding Type? ",
+                help = None,
                 options=(["", "FHWA", "FAA", "STATE", "OTHER"] if not is_awp else ["", "FHWY", "FHWA", "FAA", "STATE", "OTHER"]),
                 default_key=("awp_funding_type" if is_awp else None),
                 is_awp=is_awp,
@@ -335,6 +343,7 @@ def _render_original_form(is_awp: bool):
             st.session_state["proj_prac"] = session_selectbox(
                 key="proj_prac*",
                 label="Project Practice?",
+                help = None,
                 options=['', 'Highways', "Aviation", "Facilities", "Marine Highway", "Other"],
                 default_key=("awp_project_practice" if is_awp else None),
                 is_awp=is_awp,
@@ -350,6 +359,7 @@ def _render_original_form(is_awp: bool):
                 placeholder="MM-YYYY (07-2025)",
                 value=st.session_state.get("anticipated_start", ""),
                 key=widget_key("anticipated_start", version, is_awp),
+                help="The expected start date for this project during the construction year (MM‑YYYY).",
             )
         with col11:
             st.session_state["anticipated_end"] = st.text_input(
@@ -357,6 +367,7 @@ def _render_original_form(is_awp: bool):
                 placeholder="MM-YYYY (07-2025)",
                 value=st.session_state.get("anticipated_end", ""),
                 key=widget_key("anticipated_end", version, is_awp),
+                help="The expected end date for this project during the construction year (MM‑YYYY).",
             )
 
         st.write("")
@@ -374,11 +385,13 @@ def _render_original_form(is_awp: bool):
                 format="MM/DD/YYYY",
                 value=default_award_date,
                 key=widget_key("award_date", version, is_awp),
+                help = "The date the project was awarded to a contractor; sourced from AASHTOWare when available."
             )
         with col13:
             st.session_state["award_fiscal_year"] = session_selectbox(
                 key="award_fiscal_year",
                 label="Awarded Fiscal Year",
+                help = "The fiscal year in which the project was awarded; fiscal years run from October through September. Sourced from AASHTOWare when available.",
                 options=["", "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029", "2030"],
                 default_key=("awp_awardfederalfiscalyear" if is_awp else None),
                 force_str=is_awp,
@@ -389,6 +402,7 @@ def _render_original_form(is_awp: bool):
             "Awarded Contractor",
             value=val("contractor", "awp_contractor"),
             key=widget_key("contractor", version, is_awp),
+            help = "The name of the awarded contractor for this project, sourced from AASHTOWare when available"
         )
 
         col15, col16, col17 = st.columns(3)
@@ -397,18 +411,21 @@ def _render_original_form(is_awp: bool):
                 "Awarded Amount",
                 value=val("awarded_amount", "awp_proposal_awardedamount", coerce_float=True),
                 key=widget_key("awarded_amount", version, is_awp),
+                help = "Total awarded amount in dollars for the project, sourced from AASHTOWare when available"
             )
         with col16:
             st.session_state["current_contract_amount"] = st.number_input(
                 "Current Contract Amount",
                 value=val("current_contract_amount", "awp_contract_currentcontractamount", coerce_float=True),
                 key=widget_key("current_contract_amount", version, is_awp),
+                help = "The current contractr amount for the project, sourced from AASHTOWare when available"
             )
         with col17:
             st.session_state["amount_paid_to_date"] = st.number_input(
                 "Amount Paid to Date",
                 value=val("amount_paid_to_date", "awp_contract_amountpaidtodate", coerce_float=True),
                 key=widget_key("amount_paid_to_date", version, is_awp),
+                help = "Total amount paid to date to the contractor for the project, sourced from AASHTOWare when available"
             )
 
         # Tentative Advertise Date
@@ -432,33 +449,43 @@ def _render_original_form(is_awp: bool):
                 "AASHTOWare Description",
                 height=200,
                 value=st.session_state.get("awp_project_description", ""),
+                max_chars = 8000,
                 key=widget_key("awp_proj_desc", version, is_awp),
+                help = "Description of the project sourced from the AASHTOWare table."
             )
             st.session_state["proj_desc"] = st.text_area(
-                "Public Description",
+                "Public Description ✱",
                 height=200,
                 value=st.session_state.get("proj_desc", ""),
+                max_chars = 8000,
                 key=widget_key("proj_desc", version, is_awp),
+                help = "The project description as it will appear to the public."
             )
         else:
             st.session_state["proj_desc"] = st.text_area(
                 "Description",
                 height=200,
                 value=st.session_state.get("proj_desc", ""),
+                max_chars = 8000,
                 key=widget_key("proj_desc", version, is_awp),
+                help = "A comprehensive description of the project that will be visible to the public, summarizing the key details, objectives, and anticipated benefits in a clear and approachable manner."
             )
 
         st.session_state["proj_purp"] = st.text_area(
             "Project Purpose",
             height=200,
             value=st.session_state.get("proj_purp", ""),
+            max_chars = 8000,
             key=widget_key("proj_purp", version, is_awp),
+            help = "An overview of the project’s purpose, describing the goals, motivations, and expected impact that justify moving the project forward."
         )
         st.session_state["proj_impact"] = st.text_area(
             "Current Traffic Impact",
             height=200,
             value=st.session_state.get("proj_impact", ""),
+            max_chars = 8000,
             key=widget_key("proj_impact", version, is_awp),
+            help = "Information on the project’s present impact on traffic flow, such as reduced lanes, shifted routes, expected delays, or temporary restrictions."
         )
 
         st.write("")
@@ -474,10 +501,10 @@ def _render_original_form(is_awp: bool):
             value=st.session_state.get("apex_mapper_link", ""),
             key=widget_key("apex_mapper_link", version, is_awp),
         )
-        st.session_state["apex_infosheet"] = st.text_input(
-            "APEX Info Sheet",
-            value=st.session_state.get("apex_infosheet", ""),
-            key=widget_key("apex_infosheet", version, is_awp),
+        st.session_state["email_signup"] = st.text_input(
+            "Email Signup Link",
+            value=st.session_state.get("email_signup", ""),
+            key=widget_key("email_signup", version, is_awp),
         )
 
         st.write("")
@@ -486,28 +513,34 @@ def _render_original_form(is_awp: bool):
         st.session_state["impact_comm"] = impacted_comms_select(is_awp=is_awp)
 
         st.write("")
-        # Submit button
+        
+        
+        
+        # Submit Button
         submit_button = st.form_submit_button("Submit")
 
+        
         # Validation and post-submit output
         if submit_button:
             required_fields = {
                 "Construction Year": st.session_state.get("construction_year"),
+                "Phase": st.session_state.get("phase"),
                 "Project Name": st.session_state.get("proj_name"),
-                "Description": st.session_state.get("proj_desc")
-
+                "Description": st.session_state.get("proj_desc"),
             }
+
             missing_fields = [field for field, value in required_fields.items() if not value]
+
             if missing_fields:
                 for field in missing_fields:
                     st.error(f"{field} Required")
                 st.session_state["details_complete"] = False
+
             else:
-                st.success("Project Information Saved")
+                st.success("Information Saved")
                 st.session_state["details_complete"] = True
                 st.session_state["project_details"] = required_fields
-                st.session_state['details_type'] = st.session_state['current_option']
-
+                st.session_state["details_type"] = st.session_state["current_option"]
 
             # Preserve selected project label so the list repopulates on return
             if is_awp:
@@ -516,3 +549,5 @@ def _render_original_form(is_awp: bool):
             # Snapshot everything for this source so it persists across page navigation
             current_source = st.session_state.get("info_option")
             _snapshot_form(current_source)
+
+

@@ -75,7 +75,7 @@ def review_information():
     if "selected_point" in st.session_state and st.session_state["selected_point"]:
         lat, lon = st.session_state["selected_point"]
         m = folium.Map(location=[lat, lon], zoom_start=12)
-        folium.Marker(location=[lat, lon]).add_to(m)
+        folium.Marker([lat, lon], icon=folium.Icon(color="blue"), tooltip="Uploaded Point").add_to(m)
         st_folium(m, width=700, height=400)
 
     elif "selected_route" in st.session_state and st.session_state["selected_route"]:

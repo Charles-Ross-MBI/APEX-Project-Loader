@@ -376,7 +376,8 @@ elif st.session_state.step == 6:
         if custom_name.strip(): 
             st.session_state['submitted_by'] = custom_name
 
-    else: st.session_state['submitted_by'] = selected_name
+    else: 
+        st.session_state['submitted_by'] = selected_name
 
     st.write("")
     st.markdown("<h5>Upload Project</h5>", unsafe_allow_html=True)
@@ -407,7 +408,7 @@ elif st.session_state.step == 6:
     # --- Upload Button Logic (unchanged) ---
     if st.session_state.get("upload_clicked", False):
 
-        apex_url = "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_0d036ae7c0a7424088ee565727d1bb66/FeatureServer"
+        apex_url = "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_37dc8d5486454a95aed607593f39c107/FeatureServer"
         spinner_container = st.empty()
 
         # --- Upload Project ---
@@ -425,10 +426,20 @@ elif st.session_state.step == 6:
 
         spinner_container.empty()
 
+        # --- HARD STOP IF PROJECT UPLOAD FAILS ---
+        if not load_project.get("success"):
+            error_msg = load_project.get("message", "Unknown error")
+            st.error(f"LOAD PROJECT: FAILURE ❌ {error_msg}")
+            st.session_state.setdefault("step_failures", []).append(error_msg)
+            st.stop()
+        # -----------------------------------------
+
         if load_project.get("success"):
             st.session_state["apex_globalid"] = format_guid(load_project["globalids"])
             st.success("LOAD PROJECT: SUCCESS ✅")
         else:
+            # This branch is technically unreachable now because of st.stop(),
+            # but kept to avoid changing your original structure.
             st.error(f"LOAD PROJECT: FAILURE ❌ {load_project.get('message')}")
             st.session_state.setdefault("step_failures", []).append(load_project.get("message"))
 
@@ -582,6 +593,8 @@ elif st.session_state.step == 6:
                 </h5> """,
                 unsafe_allow_html=True
             )
+
+
 
 
 

@@ -23,9 +23,9 @@ def contacts_list():
     name = st.text_input("Name", key=f"name_{v}")
     c1, c2 = st.columns(2)
     with c1:
-        email = st.text_input("Email", key=f"email_{v}")
+        email = st.text_input("Email", key=f"email_{v}", help = "Enter email in valid email format (e.g., name@example.com).")
     with c2:
-        phone = st.text_input("Phone", key=f"phone_{v}")
+        phone = st.text_input("Phone", key=f"phone_{v}", help = "Enter the phone number in standard format (e.g., XXX‑XXX‑XXXX).")
 
     if st.button("Add Contact"):
         if name and email and phone:

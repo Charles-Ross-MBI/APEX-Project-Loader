@@ -75,7 +75,7 @@ def aashtoware_project():
     version = st.session_state.get("form_version", 0)
     widget_key = f"awp_project_select_{version}"
 
-    # Determine initial index: if we have a previous label, use it; otherwise point to placeholder
+    # Determine initial index
     prev_label = st.session_state.get("aashto_label", None)
     if prev_label in labels:
         initial_index = labels.index(prev_label)
@@ -85,11 +85,16 @@ def aashtoware_project():
     # --- on_change handler ---
     def _on_project_change():
         selected_label = st.session_state[widget_key]
+
         if selected_label == placeholder_label:
             # Reset session state if user chooses placeholder
             st.session_state["aashto_label"] = None
             st.session_state["aashto_id"] = None
             st.session_state["aashto_selected_project"] = None
+
+            # NEW REQUIRED RESET BEHAVIOR
+            st.session_state["awp_guid"] = None
+            st.session_state["awp_update"] = "No"
             return
 
         selected_gid = label_to_gid.get(selected_label)
@@ -98,6 +103,10 @@ def aashtoware_project():
         st.session_state["aashto_label"] = selected_label
         st.session_state["aashto_id"] = selected_gid
         st.session_state["aashto_selected_project"] = selected_label
+
+        # 🔥 NEW REQUIRED BEHAVIOR
+        st.session_state["awp_guid"] = selected_gid
+        st.session_state["awp_update"] = "Yes"
 
         if selected_gid and selected_gid != prev_gid:
             # Clear user-entered fields
@@ -130,6 +139,7 @@ def aashtoware_project():
         key=widget_key,
         on_change=_on_project_change,
     )
+
 
 
 

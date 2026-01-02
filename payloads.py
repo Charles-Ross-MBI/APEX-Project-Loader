@@ -139,9 +139,11 @@ def project_payload():
                         "House_District": st.session_state.get("house_string", None),
                         "Proj_Web": st.session_state.get("proj_web", None),
                         "APEX_Mapper_Link": st.session_state.get("apex_mapper_link", None),
+                        "Email_Signup": st.session_state.get("email_signup", None),
                         'Submitted_By': st.session_state.get('submitted_by', None),
                         "Database_Status": "Review: Awaiting Review",
                         "Database_Status_Notes": st.session_state.get("database_status_notes", None),
+                        "AWP_Update": st.session_state.get("awp_update", None),
                         "AWP_GUID": st.session_state.get("awp_globalid", None),
                     },
                     "geometry": {
