@@ -316,7 +316,7 @@ elif st.session_state.step == 4:
 
 
 elif st.session_state.step == 5:
-    st.markdown("### REVIEW & SUBMIT ✔️")
+    st.markdown("### REVIEW PROJECT ✔️")
     st.write(
     "Review all submitted project information carefully. "
     "Confirm details are correct before pressing Submit. "
