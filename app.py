@@ -135,6 +135,7 @@ elif st.session_state.step == 2:
 
     instructions("Project Information")
 
+
     st.write("")
     st.write("")
 

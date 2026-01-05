@@ -61,6 +61,16 @@ Choose how you want to provide project information. You have two options:
 
 ---
 
+##### Field Indicators
+To help guide data entry, fields are marked with the following symbols:
+
+- **⮜** Required fields  
+- **●** Fields populated automatically from AASHTOWARE
+
+These indicators appear next to each field label within the form.
+
+---
+
 ##### Step 2: Review and Complete Information
 Regardless of the data source selected, carefully review the project information.  
 Fill out all fields to the best of your ability, ensuring accuracy and completeness.
@@ -146,14 +156,14 @@ Review the errors, correct the issues, and try uploading again.
 ##### Step 5: Completion
 Once all steps succeed, your project will be fully stored in the APEX Database.  
 You may then select **Finish** to reset the app and add another project or close the application.
-"""
-,
+""",
 
     "Other Tab Example": """
 #### Instructions
 Add instructions for other tabs here as needed.
 """
 }
+
 
 
 
