@@ -9,10 +9,11 @@ import tempfile
 import zipfile
 import time
 
+from init_session import init_session_state
 from map import add_small_geocoder
-from shapefile_upload import point_shapefile, polyline_shapefile
+from shapefile_upload import point_shapefile, polyline_shapefile, polygon_shapefile
 from enter_value_upload import enter_latlng, enter_mileposts
-from draw_upload import draw_point, draw_line
+from draw_upload import draw_point, draw_line, draw_boundary
 from details_form import project_details_form
 from aashtoware import aashtoware_project, aashtoware_point
 from contacts import contacts_list
@@ -30,27 +31,9 @@ m = folium.Map(location=[64.2008, -149.4937], zoom_start=4)
 add_small_geocoder(m)
 
 
-# Initialize session state
-defaults = {
-    "step": 1,
-    "selected_point": None,
-    "selected_route": None,
-    "project_type": None,
-    "geo_option": None,
-    "info_option": None,
-    "aashto_id": "",
-    "project_name": "",
-    "project_description": "",
-    "project_category": None,
-    "project_contacts": None,
-    'details_complete': False
-}
-for key, val in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = val
+# Initialize Session State
+init_session_state()
 
-import streamlit as st
-from streamlit_scroll_to_top import scroll_to_here
 
 TOTAL_STEPS = 6
 if "step" not in st.session_state:
@@ -176,7 +159,7 @@ elif st.session_state.step == 4:
     st.markdown("<h5>Choose Project Type</h5>", unsafe_allow_html=True)
     st.session_state['project_type'] = st.segmented_control(
         "Select Project Type:",
-        ["Site Project", "Route Project"],
+        ["Site Project", "Route Project", "Boundary Projcet"],
         default=st.session_state.get('project_type', None)  # persist previous choice
     )
 
@@ -238,8 +221,9 @@ elif st.session_state.step == 4:
                 enter_latlng()
                 st.session_state.selected_route = None
 
+
         # --- Route Project ---
-        else:
+        elif st.session_state['project_type'].startswith("Route"):
             options = ["Upload Shapefile", "Enter Mileposts", "Draw Route on Map"]
 
             # Ensure default is valid
@@ -269,22 +253,60 @@ elif st.session_state.step == 4:
                 draw_line()
                 st.session_state.selected_point = None
 
+
+
+        # --- Boundary Project ---
+        elif st.session_state['project_type'].startswith("Boundary"):
+            options = ["Upload Shapefile", "Draw Boundary on Map"]
+
+            # Ensure default is valid
+            prev_option = st.session_state.get('option')
+            if prev_option not in options:
+                prev_option = options[0]
+
+            st.session_state['option'] = st.segmented_control(
+                "Choose Upload Method:",
+                options,
+                default=prev_option
+            )
+            option = st.session_state['option']
+
+            if st.session_state.get("geo_option") != option:
+                st.session_state.selected_point = None
+                st.session_state.selected_route = None
+                st.session_state.selected_boundary = None
+            st.session_state.geo_option = option
+
+            if option == "Upload Shapefile":
+                polygon_shapefile()
+                st.session_state.selected_point = None
+            elif option == "Draw Boundary on Map":
+                draw_boundary()
+                st.session_state.selected_point = None
+
+
         # --- Track previous values ---
         if "prev_selected_point" not in st.session_state:
             st.session_state.prev_selected_point = None
         if "prev_selected_route" not in st.session_state:
             st.session_state.prev_selected_route = None
+        if "prev_selected_boundary" not in st.session_state:
+            st.session_state.prev_selected_boundary = None
+
 
         point_val = st.session_state.get("selected_point")
         route_val = st.session_state.get("selected_route")
+        boundary_val = st.session_state.get("selected_boundary")
 
         point_changed = point_val is not None and point_val != st.session_state.prev_selected_point
         route_changed = route_val is not None and route_val != st.session_state.prev_selected_route
+        boundary_changed = boundary_val is not None and boundary_val != st.session_state.prev_selected_boundary
 
-        if point_changed or route_changed:
+        if point_changed or route_changed or boundary_changed:
             run_district_queries()
             st.session_state.prev_selected_point = point_val
             st.session_state.prev_selected_route = route_val
+            st.session_state.prev_selected_boundary = boundary_val
 
         # --- Collect values ---
         house_val = st.session_state.get('house_string')
@@ -312,6 +334,18 @@ elif st.session_state.step == 4:
                 col2.markdown(f"**Regions:** {region_val or '—'}")
                 st.markdown(f"**Route IDs:** {route_ids}")
                 st.markdown(f"**Route Names:** {route_names} ")
+
+        elif st.session_state['project_type'].startswith("Boundary") and boundary_val is not None and any([house_val, senate_val, borough_val, region_val]):
+            with st.expander("PROJECT GEOGRAPHIES", expanded=True):
+                col1, col2 = st.columns(2)
+                col1.markdown(f"**House Districts:** {house_val or '—'}")
+                col2.markdown(f"**Senate Districts:** {senate_val or '—'}")
+                col1.markdown(f"**Boroughs:** {borough_val or '—'}")
+                col2.markdown(f"**Regions:** {region_val or '—'}")
+                st.markdown(f"**Route IDs:** {route_ids}")
+                st.markdown(f"**Route Names:** {route_names} ")
+        
+    st.write('')
 
 
 
@@ -409,16 +443,16 @@ elif st.session_state.step == 6:
     # --- Upload Button Logic (unchanged) ---
     if st.session_state.get("upload_clicked", False):
 
-        apex_url = "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_37dc8d5486454a95aed607593f39c107/FeatureServer"
+        apex_url = st.session_state['apex_url']
         spinner_container = st.empty()
 
         # --- Upload Project ---
         with spinner_container, st.spinner("Loading Project to APEX..."):
             try:
                 payload_project = project_payload()
-                projects_layer = 0
+                projects_layer = st.session_state['projects']
                 load_project = (
-                    AGOLDataLoader(url=apex_url, layer=projects_layer).add_features(payload_project)
+                    AGOLDataLoader(url=apex_url, layer = projects_layer).add_features(payload_project)
                     if payload_project
                     else {"success": False, "message": "Failed to Load Project to APEX DB"}
                 )
@@ -426,6 +460,8 @@ elif st.session_state.step == 6:
                 load_project = {"success": False, "message": f"Project payload error: {e}"}
 
         spinner_container.empty()
+
+        
 
         # --- HARD STOP IF PROJECT UPLOAD FAILS ---
         if not load_project.get("success"):
@@ -444,37 +480,67 @@ elif st.session_state.step == 6:
             st.error(f"LOAD PROJECT: FAILURE ❌ {load_project.get('message')}")
             st.session_state.setdefault("step_failures", []).append(load_project.get("message"))
 
+
         # --- Upload Geometry ---
         with spinner_container, st.spinner("Loading Project Geometry to APEX..."):
             try:
-                payload_geometry = geometry_payload(st.session_state.get("apex_globalid"))
+                # Build the full payload list (may contain multiple geometries)
+                payload_geometries = geometry_payload(st.session_state.get("apex_globalid"))
 
+                # Determine which layer to load into
                 if st.session_state.get("selected_point"):
-                    geometry_layer = 1
+                    geometry_layer = st.session_state['sites']
                 elif st.session_state.get("selected_route"):
-                    geometry_layer = 2
+                    geometry_layer = st.session_state['routes']
+                elif st.session_state.get("selected_boundary"):
+                    geometry_layer = st.session_state['boundaries']
+                else:
+                    raise ValueError("No geometry type selected.")
 
-                load_geometry = (
-                    AGOLDataLoader(url=apex_url, layer=geometry_layer).add_features(payload_geometry)
-                    if payload_geometry
-                    else {"success": False, "message": "Failed to Load Project geometry to APEX DB"}
-                )
+                # Prepare loader
+                loader = AGOLDataLoader(url=apex_url, layer=geometry_layer)
+
+                # Track failures
+                failures = []
+
+                # Ensure payload is iterable (list of payloads)
+                geometries = payload_geometries if isinstance(payload_geometries, list) else [payload_geometries]
+
+                # Upload each geometry individually
+                for idx, geom in enumerate(geometries, start=1):
+
+                    if not geom:
+                        failures.append(f"Geometry #{idx}: Empty geometry payload.")
+                        continue
+
+                    result = loader.add_features(geom)
+
+                    if not result.get("success"):
+                        failures.append(
+                            f"Geometry #{idx}: {result.get('message', 'Unknown geometry upload failure.')}"
+                        )
+
             except Exception as e:
-                load_geometry = {"success": False, "message": f"Project Geometry payload error: {e}"}
+                failures = [f"Project Geometry payload error: {e}"]
 
         spinner_container.empty()
 
-        if load_geometry.get("success"):
+        # --- Final Status Message ---
+        if not failures:
             st.success("LOAD GEOMETRY: SUCCESS ✅")
         else:
-            st.error(f"LOAD GEOMETRY: FAILURE ❌  {load_geometry.get('message')}")
-            st.session_state.setdefault("step_failures", []).append(load_geometry.get("message"))
+            st.error("LOAD GEOMETRY: FAILURE ❌")
+            for msg in failures:
+                st.error(f"• {msg}")
+            st.session_state.setdefault("step_failures", []).extend(failures)
+
+
 
         # --- Upload Communities ---
         with spinner_container, st.spinner("Loading Communities to APEX..."):
             try:
                 payload_communities = communities_payload(st.session_state.get("apex_globalid"))
-                communities_layer = 3
+                communities_layer = st.session_state['impact_comms']
 
                 if payload_communities is None:
                     load_communities = None
@@ -499,7 +565,7 @@ elif st.session_state.step == 6:
         with spinner_container, st.spinner("Loading Contacts to APEX..."):
             try:
                 payload_contacts = contacts_payload(st.session_state.get("apex_globalid"))
-                contacts_layer = 9
+                contacts_layer = st.session_state['contacts']
 
                 if payload_contacts is None:
                     load_contacts = None
@@ -523,14 +589,15 @@ elif st.session_state.step == 6:
         # --- Upload Geography ---
         with spinner_container, st.spinner("Loading Geography to APEX..."):
             geography_layers = {
-                "region": 4,
-                "borough": 5,
-                "senate": 6,
-                "house": 7
+                "region": st.session_state['region'],
+                "borough": st.session_state['bor'],
+                "senate": st.session_state['house'],
+                "house": st.session_state['senate']
             }
 
-            if st.session_state['selected_route']:
-                geography_layers["route"] = 8   
+            # Add Impacted Routes if Route or Boundary
+            if st.session_state['selected_route'] or st.session_state['selected_boundary']:
+                geography_layers["route"] = st.session_state['impact_routes']   
 
             load_results = {}
 
@@ -598,12 +665,6 @@ elif st.session_state.step == 6:
 
 
 
-
-
-
-
-
-
 # -------------------------------------------------------------------------
 # Navigation controls
 # -------------------------------------------------------------------------
@@ -633,8 +694,13 @@ if step != 6:
             if st.session_state.project_type:
                 if st.session_state.project_type.startswith("Site"):
                     can_proceed = st.session_state.selected_point is not None
+                elif st.session_state.project_type.startswith("Route"):
+                    can_proceed = st.session_state.selected_route is not None
+                elif st.session_state.project_type.startswith("Boundary"):
+                    can_proceed = st.session_state.selected_boundary is not None
                 else:
                     can_proceed = st.session_state.selected_route is not None
+                
         elif step == 5:
             can_proceed = True
 

@@ -9,8 +9,8 @@ import logging
 # agol_username = os.getenv("AGOL_USERNAME")
 # agol_password = os.getenv("AGOL_PASSWORD")
 
-agol_username = st.secrets["AGOL_USERNAME"]
-agol_password = st.secrets["AGOL_PASSWORD"]
+# agol_username = st.secrets["AGOL_USERNAME"]
+# agol_password = st.secrets["AGOL_PASSWORD"]
 
 
 aashtoware = 'https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer'
@@ -60,8 +60,8 @@ def get_agol_token() -> str:
 
     # Payload required for authentication request
     data = {
-        "username": agol_username,
-        "password": agol_password,
+        "username": st.session_state['AGOL_USERNAME'],
+        "password": st.session_state['AGOL_PASSWORD'],
         "referer": "https://www.arcgis.com",  # Required reference for token generation
         "f": "json"  # Request response format
     }
@@ -340,17 +340,26 @@ def delete_project(url: str, layer: int, globalid: str) -> bool:
 class AGOLQueryIntersect:
     def __init__(self, url, layer, geometry, fields="*", return_geometry=False,
                  list_values=None, string_values=None):
+
         self.url = url
         self.layer = layer
-        self.geometry = self._swap_coords(geometry)  # swap coords if needed
+
+        # NEW: allow single geometry OR list of geometries
+        if isinstance(geometry, list) and len(geometry) > 0 and all(isinstance(g, list) for g in geometry):
+            # geometry is a list of geometries
+            self.geometry = [self._swap_coords(g) for g in geometry]
+        else:
+            # geometry is a single geometry
+            self.geometry = [self._swap_coords(geometry)]
+
         self.fields = fields
         self.return_geometry = return_geometry
         self.list_values_field = list_values
         self.string_values_field = string_values
         self.token = self._authenticate()
 
-        # Run query immediately on initialization
-        self.results = self._execute_query()
+        # NEW: run query for each geometry and merge results
+        self.results = self._execute_query_multiple()
 
         # If list_values is provided, store unique values in a list
         self.list_values = []
@@ -375,45 +384,73 @@ class AGOLQueryIntersect:
             # Point
             if len(geometry) == 2 and all(isinstance(coord, (int, float)) for coord in geometry):
                 return [geometry[1], geometry[0]]  # swap
-            # Line
+            # Line or polygon
             elif all(isinstance(coord, list) and len(coord) == 2 for coord in geometry):
                 return [[pt[1], pt[0]] for pt in geometry]  # swap each pair
         return geometry
 
-    def _build_geometry(self):
-        if isinstance(self.geometry, list):
-            # Point
-            if len(self.geometry) == 2 and all(isinstance(coord, (int, float)) for coord in self.geometry):
-                geometry_dict = {
-                    "x": self.geometry[0],
-                    "y": self.geometry[1],
-                    "spatialReference": {"wkid": 4326}
-                }
-                geometry_type_str = "esriGeometryPoint"
-
-            # Line
-            elif all(
-                isinstance(coord, list) and len(coord) == 2 and
-                all(isinstance(val, (int, float)) for val in coord)
-                for coord in self.geometry
-            ):
-                if len(self.geometry) >= 2:
-                    geometry_dict = {
-                        "paths": [self.geometry],
-                        "spatialReference": {"wkid": 4326}
-                    }
-                    geometry_type_str = "esriGeometryPolyline"
-                else:
-                    raise ValueError("Invalid geometry: A line must have at least two coordinate pairs.")
-            else:
-                raise ValueError("Invalid geometry format.")
-        else:
+    def _build_geometry(self, geometry):
+        if not isinstance(geometry, list):
             raise ValueError("Invalid geometry: Geometry must be a list.")
 
-        return geometry_dict, geometry_type_str
+        # POINT
+        if (
+            len(geometry) == 2
+            and all(isinstance(coord, (int, float)) for coord in geometry)
+        ):
+            geometry_dict = {
+                "x": geometry[0],
+                "y": geometry[1],
+                "spatialReference": {"wkid": 4326}
+            }
+            geometry_type_str = "esriGeometryPoint"
+            return geometry_dict, geometry_type_str
 
-    def _execute_query(self):
-        geometry_dict, geometry_type_str = self._build_geometry()
+        # LINE OR POLYGON
+        if all(
+            isinstance(coord, list)
+            and len(coord) == 2
+            and all(isinstance(val, (int, float)) for val in coord)
+            for coord in geometry
+        ):
+            # If only 2 points → definitely a line
+            if len(geometry) == 2:
+                geometry_dict = {
+                    "paths": [geometry],
+                    "spatialReference": {"wkid": 4326}
+                }
+                geometry_type_str = "esriGeometryPolyline"
+                return geometry_dict, geometry_type_str
+
+            # POLYGON CHECK
+            first = geometry[0]
+            last = geometry[-1]
+
+            # If user did NOT close the polygon, close it
+            if first != last:
+                ring = geometry + [first]
+            else:
+                ring = geometry
+
+            # A polygon must have at least 4 points (3 unique + closure)
+            if len(ring) >= 4:
+                geometry_dict = {
+                    "rings": [ring],
+                    "spatialReference": {"wkid": 4326}
+                }
+                geometry_type_str = "esriGeometryPolygon"
+                return geometry_dict, geometry_type_str
+
+            # Fallback to polyline
+            geometry_dict = {
+                "paths": [geometry],
+                "spatialReference": {"wkid": 4326}
+            }
+            geometry_type_str = "esriGeometryPolyline"
+            return geometry_dict, geometry_type_str
+
+    def _execute_query(self, geometry):
+        geometry_dict, geometry_type_str = self._build_geometry(geometry)
 
         params = {
             "geometry": json.dumps(geometry_dict),
@@ -450,6 +487,21 @@ class AGOLQueryIntersect:
 
         return results
 
+    # NEW: run query for each geometry and merge unique results
+    def _execute_query_multiple(self):
+        combined = []
+        seen = set()
+
+        for geom in self.geometry:
+            result = self._execute_query(geom)
+            for item in result:
+                key = json.dumps(item["attributes"], sort_keys=True)
+                if key not in seen:
+                    seen.add(key)
+                    combined.append(item)
+
+        return combined
+
     def _extract_unique_values(self, field_name):
         """Return a unique list of values for the specified field. Blank if no results."""
         if not self.results:
@@ -459,6 +511,7 @@ class AGOLQueryIntersect:
             return []  # gracefully return blank list if field not found
         values = [feature["attributes"].get(field_name) for feature in self.results if feature["attributes"].get(field_name) is not None]
         return list(set(values))
+
     
 
 

@@ -2,34 +2,7 @@
 import streamlit as st
 from streamlit_folium import st_folium
 import folium
-from map import set_bounds_route, set_zoom
-
-# # ----------------------------------------------------------------------
-# # Dialog for confirmation
-# # ----------------------------------------------------------------------
-# @st.dialog("Confirm Submission")
-# def confirm_submit_dialog():
-#     st.write(
-#         "You're about to submit this project to the APEX database. "
-#         "Please confirm all information has been reviewed."
-#     )
-#     st.write("**This action cannot be undone from this workflow.**")
-
-#     col_ok, col_cancel = st.columns(2)
-
-#     with col_ok:
-#         if st.button("Confirm & Submit", type="primary"):
-#             st.session_state["show_confirm_dialog"] = False
-#             st.session_state.step = 6
-#             st.rerun()
-        
-
-#     with col_cancel:
-#         if st.button("Cancel", type="secondary"):
-#             st.session_state["show_confirm_dialog"] = False
-#             st.rerun()
-
-
+from map import set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom, set_center
 
 
 # ----------------------------------------------------------------------
@@ -72,25 +45,88 @@ def review_information():
 
     # --- Map of Location ---
     header_with_edit("PROJECT LOCATION", target_step=4, help="Edit Project Loaction")
+    
+    
     if "selected_point" in st.session_state and st.session_state["selected_point"]:
-        lat, lon = st.session_state["selected_point"]
-        m = folium.Map(location=[lat, lon], zoom_start=12)
-        folium.Marker([lat, lon], icon=folium.Icon(color="blue"), tooltip="Uploaded Point").add_to(m)
+        
+        # Get Coordinates (your selected points)
+        coords = st.session_state['selected_point']   # this is already a list of points
+
+        # Compute bounding box
+        bounds = set_bounds_point(coords)
+        center = set_center(bounds)
+
+        # Create map centered on the boundary center
+        m = folium.Map(
+            location=[center[0], center[1]],
+            zoom_start=set_zoom(bounds)
+        )
+
+        # Add ALL points to the map
+        for lat, lon in coords:
+            folium.Marker(
+                [lat, lon],
+                icon=folium.Icon(color="blue"),
+                tooltip="Uploaded Point"
+            ).add_to(m)
+
+        # Render map
         st_folium(m, width=700, height=400)
+
 
     elif "selected_route" in st.session_state and st.session_state["selected_route"]:
         BLUE = "#3388ff"
-        coords = st.session_state['selected_route']
-        bounds = set_bounds_route(coords)
-        m = folium.Map(location=[coords[0][1], coords[0][0]], zoom_start=set_zoom(bounds))
+        coords = st.session_state["selected_route"]
+
+        # Compute bounding box
+        bounds = set_bounds_boundary(coords)
+        center = set_center(bounds)
+
+        # Create map centered on the boundary center
+        m = folium.Map(
+            location=[center[0], center[1]],
+            zoom_start=set_zoom(bounds)
+        )
+
+        # Draw the boundary
         folium.PolyLine(
             coords,
             color=BLUE,
             weight=8,
             opacity=1
         ).add_to(m)
-        m.fit_bounds(set_bounds_route( bounds))
+
+        # Render map
         st_folium(m, width=700, height=400)
+
+    
+    elif "selected_boundary" in st.session_state and st.session_state["selected_boundary"]:
+        BLUE = "#3388ff"
+        coords = st.session_state["selected_boundary"]
+
+        # Compute bounding box
+        bounds = set_bounds_boundary(coords)
+        center = set_center(bounds)
+
+        # Create map centered on the boundary center
+        m = folium.Map(
+            location=[center[0], center[1]],
+            zoom_start=set_zoom(bounds)
+        )
+
+        # Draw the boundary as a polygon
+        folium.Polygon(
+            locations=coords,   # list of [lat, lon] points
+            color=BLUE,
+            weight=3,
+            fill=True,         # or True if you want a filled polygon
+            opacity=1
+        ).add_to(m)
+
+
+        # Render map
+        st_folium(m, width=700, height=400)
+
 
     else:
         st.info("No location data available to display a map.")
@@ -104,7 +140,15 @@ def review_information():
 
     # Identification
     with st.expander("Identification", expanded=True):
-        st.markdown(f"**Project Name:** {st.session_state.get('proj_name','')}")
+        
+        if st.session_state.get("current_option") == "AASHTOWare Database":
+            st.markdown(f"**AASHTOWare Project Name:** {st.session_state.get('awp_proj_name','')}")
+            st.markdown(f"**Public Project Name:** {st.session_state.get('proj_name','')}")
+        
+        else:
+            st.markdown(f"**Public Project Name:** {st.session_state.get('proj_name','')}")
+        
+        
         col1, col2 = st.columns(2)
         col1.markdown(f"**Construction Year:** {st.session_state.get('construction_year','')}")
         col2.markdown(f"**Phase:** {st.session_state.get('phase','')}")
@@ -147,16 +191,14 @@ def review_information():
 
 
     # Narrative
-    with st.expander("Purpose, Description & Impact", expanded=True):
+    with st.expander("Description", expanded=True):
         
-        if st.session_state.get("info_option") == "AASHTOWare Database":
+        if st.session_state.get("current_option") == "AASHTOWare Database":
             st.markdown(f"**AASHTOWare Description:**\n\n{st.session_state.get('awp_proj_desc','')}")
+            st.write("")
             st.markdown(f"**Public Project Description:**\n\n{st.session_state.get('proj_desc','')}")
         else:
-            st.markdown(f"**Project Description:**\n\n{st.session_state.get('proj_desc','')}")
-        st.markdown(f"**Project Purpose:**\n\n{st.session_state.get('proj_purp','')}")
-        st.markdown(f"**Current Traffic Impact:**\n\n{st.session_state.get('proj_impact','')}")
-
+            st.markdown(f"**Public Project Description:**\n\n{st.session_state.get('proj_desc','')}")
 
     # Status & Links
     with st.expander("Links", expanded=True):
@@ -175,7 +217,7 @@ def review_information():
         col2.markdown(f"**DOT&PF Region:** {st.session_state.get('region_string','')}")
 
     # Routes
-    if st.session_state['selected_route']:
+    if st.session_state['selected_route'] or st.session_state['selected_boundary']:
         with st.expander("Routes", expanded=True):
             st.markdown(f"**Route IDs:** {st.session_state.get('route_ids','')}")
             st.markdown(f"**Route Names:** {st.session_state.get('route_names','')}")
@@ -197,7 +239,7 @@ def review_information():
 
     # --- Contacts ---
     header_with_edit("CONTACTS", target_step=3, help="Edit project contacts")
-    contacts = st.session_state.get("contacts", [])
+    contacts = st.session_state.get("project_contacts", [])
     if contacts:
         if isinstance(contacts[0], dict):
             st.table(contacts)
@@ -210,8 +252,3 @@ def review_information():
     st.write("")
     st.write("")
 
-    # # --- Submit button ---
-    # if st.button("SUBMIT PROJECT", type="primary"):
-    #     st.session_state["show_confirm_dialog"] = True
-        
-    #     confirm_submit_dialog()

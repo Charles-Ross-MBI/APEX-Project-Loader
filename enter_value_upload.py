@@ -58,7 +58,7 @@ def enter_latlng():
 def enter_mileposts():
     st.write("")
     # Milepost AGOL Layer
-    mileposts = 'https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer'
+    mileposts = st.sessoin_state['mileposts']
 
     # Grab List of Route Names
     route_names = get_unique_field_values(

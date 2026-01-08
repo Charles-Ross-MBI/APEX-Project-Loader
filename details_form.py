@@ -281,45 +281,39 @@ def _render_original_form(is_awp: bool):
         col1, col2 = st.columns(2)
 
         with col1:
-            cy_options = ['', 'CY2025', 'CY2026', 'CY2027', 'CY2028', 'CY2029', 'CY2030']
-            # Determine current year in CY format
             current_year = datetime.datetime.now().year
             current_cy_str = f"CY{current_year}"
             # If current year is not in the list, fall back to ''
-            default_index = cy_options.index(current_cy_str) if current_cy_str in cy_options else 0
-            current_cy = st.session_state.get("construction_year", cy_options[default_index])
+            default_index = st.session_state['construction_years'].index(current_cy_str) if current_cy_str in st.session_state['construction_years'] else 0
+            current_cy = st.session_state.get("construction_year", st.session_state['construction_years'][default_index])
             st.session_state["construction_year"] = st.selectbox(
                 "Construction Year ⮜",
-                cy_options,
+                st.session_state['construction_years'],
                 index=default_index,
                 key=widget_key("construction_year", version, is_awp),
                 help="The project’s assigned year. Continuing projects must also receive a new year.",
             )
         with col2:
-            phase_options = ['', "Planning", "Construction"]
-            current_phase = st.session_state.get('phase', '')
-            st.session_state["phase"] = st.selectbox(
-                "Phase ⮜", phase_options,
-                index=(phase_options.index(current_phase) if current_phase in phase_options else 0),
-                key=widget_key("phase", version, is_awp),
-                help="Indicates the construction phase scheduled for this project in the current year.",
-            )
+            label = "Phase ◈" if is_awp else "Phase"
+            st.session_state["phase"] = session_selectbox(
+                    key="phase",
+                    label=label,
+                    help="Indicates the construction phase scheduled for this project in the current year.",
+                    options=(st.session_state['phase_list']),
+                    default_key=("awp_project_workflowphaseid" if is_awp else None),
+                    is_awp=is_awp,
+                )
+
 
         # Project Identifiers
         col5, col6, col7 = st.columns(3)
         with col5:
-            if is_awp:
-                st.session_state["iris"] = st.text_input(
-                    "IRIS ◈",
-                    value=val("iris", "awp_iris_number"),
-                    key=widget_key("iris", version, is_awp),
-                )
-            else:
-                st.session_state["iris"] = st.text_input(
-                    "IRIS",
-                    value=val("iris", "awp_iris_number"),
-                    key=widget_key("iris", version, is_awp),
-                )
+            label = "IRIS ◈" if is_awp else "IRIS"
+            st.session_state["iris"] = st.text_input(
+                label,
+                value=val("iris", "awp_iris_number"),
+                key=widget_key("iris", version, is_awp),
+            )
         with col6:
             st.session_state["stip"] = st.text_input(
                 "STIP",
@@ -338,201 +332,142 @@ def _render_original_form(is_awp: bool):
         st.markdown("<h5>3. FUNDING TYPE & PRACTICE</h4>", unsafe_allow_html=True)
         col13, col14 = st.columns(2)
         with col13:
-            if is_awp:
-                st.session_state["fund_type"] = session_selectbox(
-                    key="fund_type*",
-                    label="Funding Type? ◈",
-                    help = None,
-                    options=(["", "FHWA", "FAA", "STATE", "OTHER"] if not is_awp else ["", "FHWY", "FHWA", "FAA", "STATE", "OTHER"]),
-                    default_key=("awp_funding_type" if is_awp else None),
-                    is_awp=is_awp,
-                )
-            else:
-                st.session_state["fund_type"] = session_selectbox(
-                    key="fund_type*",
-                    label="Funding Type?",
-                    help = None,
-                    options=(["", "FHWA", "FAA", "STATE", "OTHER"] if not is_awp else ["", "FHWY", "FHWA", "FAA", "STATE", "OTHER"]),
-                    default_key=("awp_funding_type" if is_awp else None),
-                    is_awp=is_awp,
-                )
+            label = "Funding Type ◈" if is_awp else "Funding Type"
+            st.session_state["fund_type"] = session_selectbox(
+                key="fund_type",
+                label=label,
+                help = None,
+                options=(st.session_state['funding_list']),
+                default_key=("awp_funding_type" if is_awp else None),
+                is_awp=is_awp,
+            )
         with col14:
-            if is_awp:
-                st.session_state["proj_prac"] = session_selectbox(
-                    key="proj_prac*",
-                    label="Project Practice? ◈",
-                    help = None,
-                    options=['', 'Highways', "Aviation", "Facilities", "Marine Highway", "Other"],
-                    default_key=("awp_project_practice" if is_awp else None),
-                    is_awp=is_awp,
-                )
-            else:
-                st.session_state["proj_prac"] = session_selectbox(
-                    key="proj_prac*",
-                    label="Project Practice?",
-                    help = None,
-                    options=['', 'Highways', "Aviation", "Facilities", "Marine Highway", "Other"],
-                    default_key=("awp_project_practice" if is_awp else None),
-                    is_awp=is_awp,
-                )
+            label = "Project Practice ◈" if is_awp else "Project Practice"
+            st.session_state["proj_prac"] = session_selectbox(
+                key="proj_prac",
+                label=label,
+                help = None,
+                options=st.session_state['practice_list'],
+                default_key=("awp_project_practice" if is_awp else None),
+                is_awp=is_awp,
+            )
 
         st.write("")
         st.write("")
+        
+
         st.markdown("<h5>4. START & END DATE</h4>", unsafe_allow_html=True)
         col10, col11 = st.columns(2)
         with col10:
-            st.session_state["anticipated_start"] = st.text_input(
-                "Anticipated Start Date",
-                placeholder="MM-YYYY (07-2025)",
-                value=st.session_state.get("anticipated_start", ""),
-                key=widget_key("anticipated_start", version, is_awp),
-                help="The expected start date for this project during the construction year (MM‑YYYY).",
-            )
+            label = "Anticipated Begin Year ◈" if is_awp else "Anticipated Begin Year"
+            st.session_state["anticipated_start"] = session_selectbox(
+                    key="anticipated_start",
+                    label=label,
+                    help = "The year in which the project was is anticipated to begin",
+                    options=st.session_state['years'],
+                    default_key=("awp_anticipated_construction_begin" if is_awp else None),
+                    force_str=is_awp,
+                    is_awp=is_awp,
+                )
         with col11:
-            st.session_state["anticipated_end"] = st.text_input(
-                "Anticipated End Date",
-                placeholder="MM-YYYY (07-2025)",
-                value=st.session_state.get("anticipated_end", ""),
-                key=widget_key("anticipated_end", version, is_awp),
-                help="The expected end date for this project during the construction year (MM‑YYYY).",
-            )
+            label = "Anticipated End Year ◈" if is_awp else "Anticipated End Year"
+            st.session_state["anticipated_end"] = session_selectbox(
+                    key="anticipated_end",
+                    label=label,
+                    help = "The year in which the project was is anticipated to be completed",
+                    options=st.session_state['years'],
+                    default_key=("awp_anticipated_construction_end" if is_awp else None),
+                    force_str=is_awp,
+                    is_awp=is_awp,
+                )
+
 
         st.write("")
         st.write("")
+
+
         st.markdown("<h5>5. AWARD INFORMATION</h4>", unsafe_allow_html=True)
         col12, col13 = st.columns(2)
         with col12:
+            label = "Award Date ◈" if is_awp else "Award Date"
             stored_award_date = st.session_state.get("award_date", None)
             default_award_date = stored_award_date if isinstance(stored_award_date, datetime.date) else None
-            if is_awp and default_award_date is None:
-                awp_date = st.session_state.get("awp_award_date", None)
-                default_award_date = awp_date.date() if isinstance(awp_date, datetime.datetime) else awp_date if isinstance(awp_date, datetime.date) else datetime.datetime.fromisoformat(awp_date).date() if isinstance(awp_date, str) and awp_date.strip() else None
-                st.session_state["award_date"] = st.date_input(
-                    "Award Date ◈",
-                    format="MM/DD/YYYY",
-                    value=default_award_date,
-                    key=widget_key("award_date", version, is_awp),
-                    help = "The date the project was awarded to a contractor; sourced from AASHTOWare when available."
-                )
-            else:
-                awp_date = st.session_state.get("awp_award_date", None)
-                default_award_date = awp_date.date() if isinstance(awp_date, datetime.datetime) else awp_date if isinstance(awp_date, datetime.date) else datetime.datetime.fromisoformat(awp_date).date() if isinstance(awp_date, str) and awp_date.strip() else None
-                st.session_state["award_date"] = st.date_input(
-                    "Award Date",
-                    format="MM/DD/YYYY",
-                    value=default_award_date,
-                    key=widget_key("award_date", version, is_awp),
-                    help = "The date the project was awarded to a contractor; sourced from AASHTOWare when available."
-                )
-        with col13:
-            if is_awp:
-                st.session_state["award_fiscal_year"] = session_selectbox(
-                    key="award_fiscal_year",
-                    label="Awarded Fiscal Year ◈",
-                    help = "The fiscal year in which the project was awarded; fiscal years run from October through September. Sourced from AASHTOWare when available.",
-                    options=["", "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029", "2030"],
-                    default_key=("awp_awardfederalfiscalyear" if is_awp else None),
-                    force_str=is_awp,
-                    is_awp=is_awp,
-                )
-            else:
-                st.session_state["award_fiscal_year"] = session_selectbox(
-                    key="award_fiscal_year",
-                    label="Awarded Fiscal Year",
-                    help = "The fiscal year in which the project was awarded; fiscal years run from October through September. Sourced from AASHTOWare when available.",
-                    options=["", "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029", "2030"],
-                    default_key=("awp_awardfederalfiscalyear" if is_awp else None),
-                    force_str=is_awp,
-                    is_awp=is_awp,
-                )
+            awp_date = st.session_state.get("awp_award_date", None)
+            default_award_date = awp_date.date() if isinstance(awp_date, datetime.datetime) else awp_date if isinstance(awp_date, datetime.date) else datetime.datetime.fromisoformat(awp_date).date() if isinstance(awp_date, str) and awp_date.strip() else None
+            st.session_state["award_date"] = st.date_input(
+                label,
+                format="MM/DD/YYYY",
+                value=default_award_date,
+                key=widget_key("award_date", version, is_awp),
+                help = "The date the project was awarded to a contractor; sourced from AASHTOWare when available."
+            )
 
-        if is_awp:
-            st.session_state["contractor"] = st.text_input(
-                "Awarded Contractor ◈",
-                value=val("contractor", "awp_contractor"),
-                key=widget_key("contractor", version, is_awp),
-                help = "The name of the awarded contractor for this project, sourced from AASHTOWare when available"
+        with col13:
+            label = "Awarded Fiscal Year ◈" if is_awp else "Awarded Fiscal Year"
+            st.session_state["award_fiscal_year"] = session_selectbox(
+                key="award_fiscal_year",
+                label=label,
+                help = "The fiscal year in which the project was awarded; fiscal years run from October through September. Sourced from AASHTOWare when available.",
+                options=["", "2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029", "2030"],
+                default_key=("awp_awardfederalfiscalyear" if is_awp else None),
+                force_str=is_awp,
+                is_awp=is_awp,
             )
-        else:
-            st.session_state["contractor"] = st.text_input(
-                "Awarded Contractor",
-                value=val("contractor", "awp_contractor"),
-                key=widget_key("contractor", version, is_awp),
-                help = "The name of the awarded contractor for this project, sourced from AASHTOWare when available"
-            )
+
+
+        label = "Awarded Contractor ◈" if is_awp else "Awarded Contractor"
+        st.session_state["contractor"] = st.text_input(
+            label,
+            value=val("contractor", "awp_contractor"),
+            key=widget_key("contractor", version, is_awp),
+            help = "The name of the awarded contractor for this project, sourced from AASHTOWare when available"
+        )
 
         col15, col16, col17 = st.columns(3)
         with col15:
-            if is_awp:
-                st.session_state["awarded_amount"] = st.number_input(
-                    "Awarded Amount ◈",
-                    value=val("awarded_amount", "awp_proposal_awardedamount", coerce_float=True),
-                    key=widget_key("awarded_amount", version, is_awp),
-                    help = "Total awarded amount in dollars for the project, sourced from AASHTOWare when available"
-                )
-            else:
-                st.session_state["awarded_amount"] = st.number_input(
-                "Awarded Amount",
+            label = "Awarded Amount ◈" if is_awp else "Awarded Amount"
+            st.session_state["awarded_amount"] = st.number_input(
+                label,
                 value=val("awarded_amount", "awp_proposal_awardedamount", coerce_float=True),
                 key=widget_key("awarded_amount", version, is_awp),
                 help = "Total awarded amount in dollars for the project, sourced from AASHTOWare when available"
             )
+            
         with col16:
-            if is_awp:
-                st.session_state["current_contract_amount"] = st.number_input(
-                    "Current Contract Amount ◈",
-                    value=val("current_contract_amount", "awp_contract_currentcontractamount", coerce_float=True),
-                    key=widget_key("current_contract_amount", version, is_awp),
-                    help = "The current contractr amount for the project, sourced from AASHTOWare when available"
-                )
-            else:
-                    st.session_state["current_contract_amount"] = st.number_input(
-                    "Current Contract Amount",
-                    value=val("current_contract_amount", "awp_contract_currentcontractamount", coerce_float=True),
-                    key=widget_key("current_contract_amount", version, is_awp),
-                    help = "The current contractr amount for the project, sourced from AASHTOWare when available"
-                )
+            label = "Current Contract Amount ◈" if is_awp else "Current Contract Amount"
+            st.session_state["current_contract_amount"] = st.number_input(
+                label,
+                value=val("current_contract_amount", "awp_contract_currentcontractamount", coerce_float=True),
+                key=widget_key("current_contract_amount", version, is_awp),
+                help = "The current contractr amount for the project, sourced from AASHTOWare when available"
+            )
+
         with col17:
-            if is_awp:
-                st.session_state["amount_paid_to_date"] = st.number_input(
-                    "Amount Paid to Date ◈",
-                    value=val("amount_paid_to_date", "awp_contract_amountpaidtodate", coerce_float=True),
-                    key=widget_key("amount_paid_to_date", version, is_awp),
-                    help = "Total amount paid to date to the contractor for the project, sourced from AASHTOWare when available"
-                )
-            else:
-                st.session_state["amount_paid_to_date"] = st.number_input(
-                    "Amount Paid to Date",
-                    value=val("amount_paid_to_date", "awp_contract_amountpaidtodate", coerce_float=True),
-                    key=widget_key("amount_paid_to_date", version, is_awp),
-                    help = "Total amount paid to date to the contractor for the project, sourced from AASHTOWare when available"
-                )
+            label = "Amount Paid to Date ◈" if is_awp else "Amount Paid to Date"
+            st.session_state["amount_paid_to_date"] = st.number_input(
+                label,
+                value=val("amount_paid_to_date", "awp_contract_amountpaidtodate", coerce_float=True),
+                key=widget_key("amount_paid_to_date", version, is_awp),
+                help = "Total amount paid to date to the contractor for the project, sourced from AASHTOWare when available"
+            )
 
         # Tentative Advertise Date
+        label = "Tentative Advertise Date ◈" if is_awp else "Tentative Advertise Date"
         stored_tenadd = st.session_state.get("tenadd", None)
-        default_tenadd = stored_tenadd if isinstance(stored_tenadd, datetime.date) else None
-        if is_awp and default_tenadd is None:
-            awp_tenadd = st.session_state.get("awp_tentative_advertising_date", None)
-            default_tenadd = awp_tenadd.date() if isinstance(awp_tenadd, datetime.datetime) else awp_tenadd if isinstance(awp_tenadd, datetime.date) else datetime.datetime.fromisoformat(awp_tenadd).date() if isinstance(awp_tenadd, str) and awp_tenadd.strip() else None
-            st.session_state["tenadd"] = st.date_input(
-                "Tentative Advertise Date ◈",
-                format="MM/DD/YYYY",
-                value=default_tenadd,
-                key=widget_key("tenadd", version, is_awp),
-            )
-        else:
-            awp_tenadd = st.session_state.get("awp_tentative_advertising_date", None)
-            default_tenadd = awp_tenadd.date() if isinstance(awp_tenadd, datetime.datetime) else awp_tenadd if isinstance(awp_tenadd, datetime.date) else datetime.datetime.fromisoformat(awp_tenadd).date() if isinstance(awp_tenadd, str) and awp_tenadd.strip() else None
-            st.session_state["tenadd"] = st.date_input(
-                "Tentative Advertise Date",
-                format="MM/DD/YYYY",
-                value=default_tenadd,
-                key=widget_key("tenadd", version, is_awp),
-            )
+        awp_tenadd = st.session_state.get("awp_tentative_advertising_date", None)
+        default_tenadd = awp_tenadd.date() if isinstance(awp_tenadd, datetime.datetime) else awp_tenadd if isinstance(awp_tenadd, datetime.date) else datetime.datetime.fromisoformat(awp_tenadd).date() if isinstance(awp_tenadd, str) and awp_tenadd.strip() else None
+        st.session_state["tenadd"] = st.date_input(
+            "Tentative Advertise Date",
+            format="MM/DD/YYYY",
+            value=default_tenadd,
+            help = "The tentative advertised date represents the preliminary target month and year when the project is expected to be publicly posted for contractor bidding. " \
+            "This date is used for planning and coordination purposes and may shift as design progress, funding availability, permitting, and review milestones evolve.",
+            key=widget_key("tenadd", version, is_awp),
+        )
 
         st.write("")
         st.write("")
-        st.markdown("<h5>6. DESCRIPTIONS, IMPACTS, PURPOSE</h4>", unsafe_allow_html=True)
+        st.markdown("<h5>6. DESCRIPTION</h4>", unsafe_allow_html=True)
         if is_awp:
             st.session_state["awp_proj_desc"] = st.text_area(
                 "AASHTOWare Description ◈",
@@ -560,22 +495,6 @@ def _render_original_form(is_awp: bool):
                 help = "A comprehensive description of the project that will be visible to the public, summarizing the key details, objectives, and anticipated benefits in a clear and approachable manner."
             )
 
-        st.session_state["proj_purp"] = st.text_area(
-            "Project Purpose",
-            height=200,
-            value=st.session_state.get("proj_purp", ""),
-            max_chars = 8000,
-            key=widget_key("proj_purp", version, is_awp),
-            help = "An overview of the project’s purpose, describing the goals, motivations, and expected impact that justify moving the project forward."
-        )
-        st.session_state["proj_impact"] = st.text_area(
-            "Current Traffic Impact",
-            height=200,
-            value=st.session_state.get("proj_impact", ""),
-            max_chars = 8000,
-            key=widget_key("proj_impact", version, is_awp),
-            help = "Information on the project’s present impact on traffic flow, such as reduced lanes, shifted routes, expected delays, or temporary restrictions."
-        )
 
         st.write("")
         st.write("")
@@ -606,16 +525,15 @@ def _render_original_form(is_awp: bool):
         
         
         # Submit Button
-        submit_button = st.form_submit_button("Submit")
+        submit_button = st.form_submit_button("Submit Information")
 
         
         # Validation and post-submit output
         if submit_button:
             required_fields = {
                 "Construction Year": st.session_state.get("construction_year"),
-                "Phase": st.session_state.get("phase"),
-                "Project Name": st.session_state.get("proj_name"),
-                "Description": st.session_state.get("proj_desc"),
+                "Public Project Name": st.session_state.get("proj_name"),
+                "Public Description": st.session_state.get("proj_desc"),
             }
 
             missing_fields = [field for field, value in required_fields.items() if not value]
@@ -626,7 +544,7 @@ def _render_original_form(is_awp: bool):
                 st.session_state["details_complete"] = False
 
             else:
-                st.success("Information Saved")
+                st.success("All necessary project information is now complete. Please continue.")
                 st.session_state["details_complete"] = True
                 st.session_state["project_details"] = required_fields
                 st.session_state["details_type"] = st.session_state["current_option"]

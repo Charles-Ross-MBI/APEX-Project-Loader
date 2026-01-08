@@ -8,8 +8,8 @@ def is_valid_phone(phone):
     return re.match(r'^\d{3}-\d{3}-\d{4}$', phone) is not None
 
 def contacts_list():
-    if "contacts" not in st.session_state:
-        st.session_state["contacts"] = []
+    if "project_contacts" not in st.session_state:
+        st.session_state["project_contacts"] = []
     if "ver" not in st.session_state:
         st.session_state["ver"] = 0  # input version
 
@@ -34,7 +34,7 @@ def contacts_list():
             elif not is_valid_phone(phone):
                 st.error("❌ Phone must be in format XXX-XXX-XXXX.")
             else:
-                st.session_state["contacts"].append({
+                st.session_state["project_contacts"].append({
                     "Role": role,
                     "Name": name,
                     "Email": email,
@@ -50,14 +50,14 @@ def contacts_list():
 
     st.markdown("<h5>Contacts List</h5>", unsafe_allow_html=True)
     # ✅ Updated logic: always display existing contacts if they are already there
-    if st.session_state["contacts"]:
-        for i, contact in enumerate(st.session_state["contacts"]):
+    if st.session_state["project_contacts"]:
+        for i, contact in enumerate(st.session_state["project_contacts"]):
             c1, c2 = st.columns([4, 1])
             with c1:
                 st.write(f"{contact['Role']} - {contact['Name']} ({contact['Email']}, {contact['Phone']})")
             with c2:
                 if st.button("Remove", key=f"remove_{i}"):
-                    st.session_state["contacts"].pop(i)
+                    st.session_state["project_contacts"].pop(i)
                     st.rerun()
     else:
         st.info("No contacts added yet.")

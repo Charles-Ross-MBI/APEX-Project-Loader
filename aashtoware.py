@@ -49,10 +49,7 @@ def aashtoware_point(lat: float, lon: float):
 
 
 def aashtoware_project():
-    aashtoware = (
-        "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/"
-        "AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer"
-    )
+    aashtoware = st.session_state['aashtoware_url']
 
     # Build <label> -> <GlobalID> mapping for the dropdown
     projects = get_multiple_fields(

@@ -1,5 +1,5 @@
 import streamlit as st
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, Polygon
 import datetime
 from agol_util import select_record
 
@@ -44,24 +44,129 @@ def to_date_string(value):
     return 
 
 
+def _average_centers(centers):
+    if not centers:
+        raise ValueError("No centers provided.")
+
+    xs = [c[0] for c in centers]
+    ys = [c[1] for c in centers]
+
+    return (sum(xs) / len(xs), sum(ys) / len(ys))  # (lon, lat)
+
+
+
+def get_point_center(points):
+    """
+    Given:
+      - A single point [lat, lon]
+      - A list of points [[lat, lon], ...]
+      - A list of point groups [[[lat, lon], ...], ...]
+
+    Return:
+      - A single (lon, lat) tuple representing the center point.
+    """
+
+    # Normalize to flat list of [lat, lon]
+    flat_points = []
+
+    # Single point [lat, lon]
+    if isinstance(points, (list, tuple)) and len(points) == 2 and \
+       all(isinstance(x, (int, float)) for x in points):
+        flat_points.append(points)
+    else:
+        # List or nested list
+        for item in points:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                flat_points.append(item)
+            elif isinstance(item, (list, tuple)):
+                for pt in item:
+                    if isinstance(pt, (list, tuple)) and len(pt) == 2:
+                        flat_points.append(pt)
+
+    if not flat_points:
+        raise ValueError("No valid point data found.")
+
+    # If only one point, just return it (as lon, lat)
+    if len(flat_points) == 1:
+        lat, lon = flat_points[0]
+        return (float(lon), float(lat))
+
+    # Multiple points → average center
+    lats = [float(pt[0]) for pt in flat_points]
+    lons = [float(pt[1]) for pt in flat_points]
+
+    center_lat = sum(lats) / len(lats)
+    center_lon = sum(lons) / len(lons)
+
+    return (center_lon, center_lat)  # (lon, lat)
+
+
+
 def get_line_center(line_geom):
     """
-    Given a Shapely LineString or a list of coordinates,
-    return the center point (midpoint along its length).
+    Given:
+      - A single LineString or list of coordinates
+      - A list of LineStrings / coordinate lists
+
+    Return:
+      - A single (lon, lat) tuple representing the center of centers.
     """
-    # If input is a list of coordinates, convert to LineString
-    if isinstance(line_geom, list):
-        line_geom = LineString(line_geom)
-    
-    if not isinstance(line_geom, LineString):
-        raise ValueError("Geometry must be a LineString or list of coordinates")
-    
-    # Find halfway distance along the line
-    midpoint_distance = line_geom.length / 2.0
-    center_point = line_geom.interpolate(midpoint_distance)
-    
-    # Return as a tuple (lon, lat)
-    return (center_point.x, center_point.y)
+
+    def _center_single_line(g):
+        if isinstance(g, list):
+            g = LineString(g)
+
+        if not isinstance(g, LineString):
+            raise ValueError("Geometry must be a LineString or list of coordinates")
+
+        midpoint_distance = g.length / 2.0
+        center = g.interpolate(midpoint_distance)
+        return (center.x, center.y)  # (lon, lat)
+
+    # Multiple geometries
+    if isinstance(line_geom, list) and any(isinstance(x, (list, LineString)) for x in line_geom):
+        centers = []
+        for g in line_geom:
+            centers.append(_center_single_line(g))
+        return _average_centers(centers)
+
+    # Single geometry
+    return _center_single_line(line_geom)
+
+
+
+def get_polygon_center(poly_geom):
+    """
+    Given:
+      - A single Polygon or list of coordinates
+      - A list of Polygons / coordinate lists
+
+    Return:
+      - A single (lon, lat) tuple representing the center of centers.
+    """
+
+    def _center_single_polygon(g):
+        if isinstance(g, list):
+            g = Polygon(g)
+
+        if not isinstance(g, Polygon):
+            raise ValueError("Geometry must be a Polygon or list of coordinates")
+
+        c = g.centroid
+        return (c.x, c.y)  # (lon, lat)
+
+    # Multiple geometries
+    if isinstance(poly_geom, list) and any(isinstance(x, (list, Polygon)) for x in poly_geom):
+        centers = []
+        for g in poly_geom:
+            centers.append(_center_single_polygon(g))
+        return _average_centers(centers)
+
+    # Single geometry
+    return _center_single_polygon(poly_geom)
+
+
+
 
 
 
@@ -93,12 +198,16 @@ def project_payload():
         center = None
         if st.session_state.get("selected_point"):
             pt = st.session_state["selected_point"]
-            center = (pt.x, pt.y) if isinstance(pt, Point) else (pt[0], pt[1])
+            center = get_point_center(pt)
             proj_type = "Site"
         elif st.session_state.get("selected_route"):
             route = st.session_state["selected_route"]
             center = get_line_center(route)
             proj_type = "Route"
+        elif st.session_state.get("selected_boundary"):
+            boundary = st.session_state["selected_boundary"]
+            center = get_polygon_center(boundary)
+            proj_type = "Boundary"
 
         # Build payload with .get() and default None
         payload = {
@@ -113,8 +222,6 @@ def project_payload():
                         "Fed_Proj_Num": st.session_state.get("fed_proj_num", None),
                         "AWP_Proj_Desc": st.session_state.get("awp_proj_desc", None),
                         "Proj_Desc": st.session_state.get("proj_desc", None),
-                        "Proj_Purp": st.session_state.get("proj_purp", None),
-                        "Proj_Impact": st.session_state.get("proj_impact", None),
                         "Proj_Prac": st.session_state.get("proj_prac", None),
                         "Phase": st.session_state.get("phase", None),
                         "Fund_Type": st.session_state.get("fund_type", None),
@@ -142,9 +249,8 @@ def project_payload():
                         "Email_Signup": st.session_state.get("email_signup", None),
                         'Submitted_By': st.session_state.get('submitted_by', None),
                         "Database_Status": "Review: Awaiting Review",
-                        "Database_Status_Notes": st.session_state.get("database_status_notes", None),
-                        "AWP_Update": st.session_state.get("awp_update", None),
                         "AWP_GUID": st.session_state.get("awp_globalid", None),
+                        "AWP_Update": st.session_state.get("awp_update", None)
                     },
                     "geometry": {
                         "x": center[1] if center else None,  # longitude
@@ -155,6 +261,7 @@ def project_payload():
             ]
         }
 
+    
         return clean_payload(payload)
 
     except Exception as e:
@@ -166,69 +273,174 @@ def project_payload():
 
 
 def geometry_payload(globalid: str):
+
     try:
-        # Point case
+        payloads = []  # final list of cleaned payloads
+
+        # ---------------------------------------------------------
+        # POINT CASE
+        # ---------------------------------------------------------
         if st.session_state.get("selected_point"):
-            pt = st.session_state["selected_point"]
-            payload = {
-                "adds": [
-                    {
-                        "attributes": { 
-                            "Site_AWP_Proj_Name": st.session_state.get("awp_proj_name", None),
-                            "Site_Proj_Name": st.session_state.get("proj_name", None),
-                            "Site_DOT_PF_Region": st.session_state.get("region_string", None),
-                            "Site_Borough_Census_Area": st.session_state.get("borough_string", None),
-                            "Site_Senate_District": st.session_state.get("senate_string", None),
-                            "Site_House_District": st.session_state.get("house_string", None),
-                            "parentglobalid": globalid
 
-                        },
-                        "geometry": {
-                            "x": pt[1] if isinstance(pt, (list, tuple)) else pt.get("x"),
-                            "y": pt[0] if isinstance(pt, (list, tuple)) else pt.get("y"),
-                            "spatialReference": {"wkid": 4326}
+            points = st.session_state["selected_point"]
+
+            def normalize_points(p):
+                flat = []
+                if isinstance(p, (list, tuple)) and len(p) == 2:
+                    return [p]
+                for item in p:
+                    if isinstance(item, (list, tuple)) and len(item) == 2:
+                        flat.append(item)
+                    else:
+                        for sub in item:
+                            if isinstance(sub, (list, tuple)) and len(sub) == 2:
+                                flat.append(sub)
+                return flat
+
+            flat_points = normalize_points(points)
+
+            if not flat_points:
+                raise ValueError("No valid point geometry found.")
+
+            for lat, lon in flat_points:
+                payload = {
+                    "adds": [
+                        {
+                            "attributes": {
+                                "Site_AWP_Proj_Name": st.session_state.get("awp_proj_name"),
+                                "Site_Proj_Name": st.session_state.get("proj_name"),
+                                "Site_DOT_PF_Region": st.session_state.get("region_string"),
+                                "Site_Borough_Census_Area": st.session_state.get("borough_string"),
+                                "Site_Senate_District": st.session_state.get("senate_string"),
+                                "Site_House_District": st.session_state.get("house_string"),
+                                "parentglobalid": globalid
+                            },
+                            "geometry": {
+                                "x": float(lon),
+                                "y": float(lat),
+                                "spatialReference": {"wkid": 4326}
+                            }
                         }
-                    }
-                ]
-            }
-            return payload
+                    ]
+                }
 
-        # Route case
+                payloads.append(clean_payload(payload))
+
+            return payloads
+
+
+        # ---------------------------------------------------------
+        # ROUTE CASE (POLYLINES)
+        # ---------------------------------------------------------
         elif st.session_state.get("selected_route"):
+
             route = st.session_state["selected_route"]
-            payload = {
-                "adds": [
-                    {
-                        "attributes": { 
-                            "Route_AWP_Proj_Name": st.session_state.get("awp_proj_name", None),
-                            "Route_Proj_Name": st.session_state.get("proj_name", None),
-                            "Route_DOT_PF_Region": st.session_state.get("region_string", None),
-                            "Route_Borough_Census_Area": st.session_state.get("borough_string", None),
-                            "Route_Senate_District": st.session_state.get("senate_string", None),
-                            "Route_House_District": st.session_state.get("house_string", None),
-                            "parentglobalid": globalid
 
-                        },
-                        "geometry": {
-                            "paths": [
-                                [
-                                    [pt[1], pt[0]] if isinstance(pt, (list, tuple)) else [pt.get("x"), pt.get("y")]
-                                    for pt in route
-                                ]
-                            ],
-                            "spatialReference": {"wkid": 4326}
+            def normalize_to_paths(r):
+                if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in r):
+                    return [r]
+                paths = []
+                for item in r:
+                    if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in item):
+                        paths.append(item)
+                    else:
+                        for sub in item:
+                            if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in sub):
+                                paths.append(sub)
+                return paths
+
+            paths_latlon = normalize_to_paths(route)
+
+            for path in paths_latlon:
+                agol_path = [[pt[1], pt[0]] for pt in path]
+
+                payload = {
+                    "adds": [
+                        {
+                            "attributes": {
+                                "Route_AWP_Proj_Name": st.session_state.get("awp_proj_name"),
+                                "Route_Proj_Name": st.session_state.get("proj_name"),
+                                "Route_DOT_PF_Region": st.session_state.get("region_string"),
+                                "Route_Borough_Census_Area": st.session_state.get("borough_string"),
+                                "Route_Senate_District": st.session_state.get("senate_string"),
+                                "Route_House_District": st.session_state.get("house_string"),
+                                "parentglobalid": globalid
+                            },
+                            "geometry": {
+                                "paths": [agol_path],
+                                "spatialReference": {"wkid": 4326}
+                            }
                         }
-                    }
-                ]
-            }
-            return clean_payload(payload)
+                    ]
+                }
 
+                payloads.append(clean_payload(payload))
+
+            return payloads
+
+
+        # ---------------------------------------------------------
+        # BOUNDARY CASE (POLYGONS)
+        # ---------------------------------------------------------
+        elif st.session_state.get("selected_boundary"):
+
+            boundary = st.session_state["selected_boundary"]
+
+            def normalize_to_rings(b):
+                if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in b):
+                    return [b]
+                rings = []
+                for item in b:
+                    if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in item):
+                        rings.append(item)
+                    else:
+                        for sub in item:
+                            if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in sub):
+                                rings.append(sub)
+                return rings
+
+            rings_latlon = normalize_to_rings(boundary)
+
+            for ring in rings_latlon:
+                converted = [[pt[1], pt[0]] for pt in ring]
+                if converted[0] != converted[-1]:
+                    converted.append(converted[0])
+
+                payload = {
+                    "adds": [
+                        {
+                            "attributes": {
+                                "Boundary_AWP_Proj_Name": st.session_state.get("awp_proj_name"),
+                                "Boundary_Proj_Name": st.session_state.get("proj_name"),
+                                "Boundary_DOT_PF_Region": st.session_state.get("region_string"),
+                                "Boundary_Borough_Census_Area": st.session_state.get("borough_string"),
+                                "Boundary_Senate_District": st.session_state.get("senate_string"),
+                                "Boundary_House_District": st.session_state.get("house_string"),
+                                "parentglobalid": globalid
+                            },
+                            "geometry": {
+                                "rings": [converted],
+                                "spatialReference": {"wkid": 4326}
+                            }
+                        }
+                    ]
+                }
+
+                payloads.append(clean_payload(payload))
+
+            return payloads
+
+
+        # ---------------------------------------------------------
+        # NOTHING SELECTED
+        # ---------------------------------------------------------
         else:
             return None
 
     except Exception as e:
         st.error(f"Error building geometry payload: {e}")
         return None
+
     
 
 

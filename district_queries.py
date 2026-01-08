@@ -16,6 +16,8 @@ def run_district_queries():
         st.session_state['project_geometry'] = st.session_state['selected_point']
     elif st.session_state.get('selected_route'):
         st.session_state['project_geometry'] = st.session_state['selected_route']
+    elif st.session_state.get('selected_boundary'):
+        st.session_state['project_geometry'] = st.session_state['selected_boundary']
     else:
         st.session_state['project_geometry'] = None
 
@@ -92,7 +94,8 @@ def run_district_queries():
 
 
         # If Routes, Intersect Route Layer
-        if st.session_state['selected_route']:
+        if st.session_state['selected_route'] or st.session_state['selected_boundary']:
+
             route = AGOLQueryIntersect(
                 url="https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer",
                 layer=0,

@@ -42,53 +42,213 @@ def add_small_geocoder(fmap, position: str = "topright", width_px: int = 120, fo
 
 
 
-def set_bounds_route(route):
+def set_bounds_point(points):
     """
-    Given a polyline geometry (a list of points in (lon, lat) order),
-    compute the overall bounding box.
+    Compute a bounding box for:
+      - A single point [lat, lon]
+      - A list of points [[lat, lon], ...]
+      - A list of point groups [[[lat, lon], ...], ...]
 
-    Example input:
-        [
-            (-149.86787829444404, 61.19528554460584),
-            (-149.86785784353071, 61.19902318902203),
-            (-149.86785784353071, 61.203020631107904),
-            ...
-        ]
-    
     Returns:
-        A list in the format [[min_lat, min_lon], [max_lat, max_lon]].
-        
-    Raises:
-        ValueError: If no valid coordinate data is found.
+        [[min_lat, min_lon], [max_lat, max_lon]]
     """
+
     min_lat = float('inf')
     min_lon = float('inf')
     max_lat = float('-inf')
     max_lon = float('-inf')
 
-    # Iterate directly over the list of (lon, lat) tuples
-    for point in route:
-        if isinstance(point, (list, tuple)) and len(point) == 2:
-            lon, lat = point
-        else:
-            continue  # skip invalid entries
+    def process_point(pt):
+        nonlocal min_lat, min_lon, max_lat, max_lon
 
-        # Update bounds
-        if lat < min_lat:
-            min_lat = lat
-        if lat > max_lat:
-            max_lat = lat
-        if lon < min_lon:
-            min_lon = lon
-        if lon > max_lon:
-            max_lon = lon
+        if not (isinstance(pt, (list, tuple)) and len(pt) == 2):
+            return
 
-    # Validate that we found valid coordinates
-    if min_lat == float('inf') or min_lon == float('inf') or \
-       max_lat == float('-inf') or max_lon == float('-inf'):
-        raise ValueError("No valid coordinate data found in the provided polyline.")
+        lat, lon = pt
+
+        # Validate numeric
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except Exception:
+            return
+
+        # Validate ranges
+        if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+            return
+
+        min_lat = min(min_lat, lat)
+        max_lat = max(max_lat, lat)
+        min_lon = min(min_lon, lon)
+        max_lon = max(max_lon, lon)
+
+    def process_group(group):
+        for pt in group:
+            process_point(pt)
+
+    # --- Determine input type ---
+    if not points:
+        raise ValueError("Empty point input.")
+
+    # Case 1: Single point
+    if isinstance(points, (list, tuple)) and len(points) == 2 and \
+       all(isinstance(x, (int, float)) for x in points):
+        process_point(points)
+
+    # Case 2: Flat list of points
+    elif all(isinstance(x, (list, tuple)) and len(x) == 2 for x in points):
+        process_group(points)
+
+    # Case 3: List of point groups
+    else:
+        for group in points:
+            if isinstance(group, (list, tuple)):
+                process_group(group)
+
+    # --- Validate ---
+    if min_lat == float('inf'):
+        raise ValueError("No valid coordinate data found.")
 
     return [[min_lat, min_lon], [max_lat, max_lon]]
+
+
+
+
+def set_bounds_route(route):
+    """
+    Compute a bounding box for:
+      - A single route (list of [lat, lon] pairs)
+      - A list of routes
+      - Any nested structure containing coordinate pairs
+
+    Returns:
+        [[min_lat, min_lon], [max_lat, max_lon]]
+    """
+
+    min_lat = float('inf')
+    min_lon = float('inf')
+    max_lat = float('-inf')
+    max_lon = float('-inf')
+
+    def process_point(pt):
+        nonlocal min_lat, min_lon, max_lat, max_lon
+
+        if (
+            isinstance(pt, (list, tuple)) and
+            len(pt) == 2
+        ):
+            try:
+                lat = float(pt[0])
+                lon = float(pt[1])
+            except (TypeError, ValueError):
+                return
+
+            min_lat = min(min_lat, lat)
+            max_lat = max(max_lat, lat)
+            min_lon = min(min_lon, lon)
+            max_lon = max(max_lon, lon)
+
+    def walk(obj):
+        """Recursively walk any nested structure."""
+        if isinstance(obj, (list, tuple)):
+            # If it's a coordinate pair, process it
+            if len(obj) == 2 and all(isinstance(x, (int, float)) for x in obj):
+                process_point(obj)
+            else:
+                # Otherwise, recurse into children
+                for item in obj:
+                    walk(item)
+
+    if not route:
+        raise ValueError("Empty route input.")
+
+    walk(route)
+
+    if min_lat == float('inf'):
+        raise ValueError("No valid coordinate data found.")
+
+    return [[min_lat, min_lon], [max_lat, max_lon]]
+
+
+
+
+
+
+
+def set_bounds_boundary(boundary):
+    """
+    Compute a bounding box for:
+      - A single polygon (list of rings)
+      - A list of polygons
+      - A flat list of [lat, lon] coordinate pairs
+
+    Returns:
+        [[min_lat, min_lon], [max_lat, max_lon]]
+
+    Raises:
+        ValueError if no valid coordinates are found.
+    """
+
+    min_lat = float('inf')
+    min_lon = float('inf')
+    max_lat = float('-inf')
+    max_lon = float('-inf')
+
+    def process_point(pt):
+        nonlocal min_lat, min_lon, max_lat, max_lon
+
+        if not (isinstance(pt, (list, tuple)) and len(pt) == 2):
+            return
+
+        lat, lon = pt  # <-- FIXED: your data is [lat, lon]
+
+        # Validate numeric
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except Exception:
+            return
+
+        # Update bounds
+        min_lat = min(min_lat, lat)
+        max_lat = max(max_lat, lat)
+        min_lon = min(min_lon, lon)
+        max_lon = max(max_lon, lon)
+
+    def process_polygon(poly):
+        # poly = [ring1, ring2, ...]
+        for ring in poly:
+            if isinstance(ring, (list, tuple)):
+                for pt in ring:
+                    process_point(pt)
+
+    # --- Determine input type ---
+    if not boundary:
+        raise ValueError("Empty polygon input.")
+
+    # Case 1: Flat list of coordinate pairs
+    if all(isinstance(x, (list, tuple)) and len(x) == 2 for x in boundary):
+        for pt in boundary:
+            process_point(pt)
+
+    # Case 2: Single polygon (list of rings)
+    elif all(isinstance(ring, (list, tuple)) for ring in boundary) and \
+         any(isinstance(ring[0], (list, tuple)) for ring in boundary):
+        process_polygon(boundary)
+
+    # Case 3: List of polygons
+    else:
+        for poly in boundary:
+            if isinstance(poly, (list, tuple)):
+                process_polygon(poly)
+
+    # --- Validate ---
+    if min_lat == float('inf'):
+        raise ValueError("No valid coordinate data found.")
+
+    return [[min_lat, min_lon], [max_lat, max_lon]]
+
+
 
 
 
@@ -122,6 +282,9 @@ def add_bottom_message(m, message: str):
 
 
 
+
+
+
 def set_zoom(bounds):
     """
     Compute an approximate zoom level from the bounds,
@@ -141,4 +304,26 @@ def set_zoom(bounds):
         return 0  # Avoid division by zero; return a default zoom.
     
     zoom = math.log(360 / delta_lon, 2)
+    zoom = zoom-1
     return int(zoom)
+
+
+
+def set_center(bounds):
+    """
+    Given bounds in the format:
+        [[min_lat, min_lon], [max_lat, max_lon]]
+    return the center point as [center_lat, center_lon].
+    """
+
+    if not bounds or len(bounds) != 2:
+        raise ValueError("Bounds must be [[min_lat, min_lon], [max_lat, max_lon]].")
+
+    min_lat, min_lon = bounds[0]
+    max_lat, max_lon = bounds[1]
+
+    center_lat = (min_lat + max_lat) / 2
+    center_lon = (min_lon + max_lon) / 2
+
+    return [center_lat, center_lon]
+
