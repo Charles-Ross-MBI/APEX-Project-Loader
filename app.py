@@ -24,7 +24,7 @@ from payloads import project_payload, communities_payload, geometry_payload, con
 from agol_util import AGOLDataLoader, format_guid, delete_project
 
 
-st.set_page_config(page_title="Alaska DOT&PF - APEX Project Creator", page_icon="📝", layout="centered")
+st.set_page_config(page_title="Alaska DOT&PF - APEX Project Loader", page_icon="📝", layout="centered")
 
 # Base overview map
 m = folium.Map(location=[64.2008, -149.4937], zoom_start=4)
