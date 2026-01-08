@@ -426,10 +426,11 @@ elif st.session_state.step == 6:
             st.button("⬅️ Back", on_click=prev_step, key="step6_back_btn")
 
         # Upload button (right) — now inside the SAME row
-        with col_upload:
-            if st.button("UPLOAD TO APEX", type="primary", key="step6_upload_btn"):
-                st.session_state.upload_clicked = True
-                st.rerun()
+        if st.session_state['submitted_by']:
+            with col_upload:
+                if st.button("UPLOAD TO APEX", type="primary", key="step6_upload_btn"):
+                    st.session_state.upload_clicked = True
+                    st.rerun()
 
     else:
         # ✅ After upload starts → hide both buttons

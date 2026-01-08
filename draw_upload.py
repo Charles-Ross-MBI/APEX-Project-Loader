@@ -13,61 +13,6 @@ from map import add_small_geocoder, set_bounds_point, set_bounds_route, set_boun
 
 
 
-def map_toolbar(top: int = 150, right: int = 40, 
-                load_key: str = "load", clear_key: str = "clear"):
-    """
-    Renders a floating toolbar with LOAD and CLEAR buttons over a folium map.
-    Returns: (load_clicked, clear_clicked)
-    
-    Parameters:
-        top  - vertical offset (px) from top of viewport
-        right - horizontal offset (px) from right of viewport
-        load_key - unique Streamlit key for LOAD button
-        clear_key - unique Streamlit key for CLEAR button
-    """
-
-    import streamlit as st
-
-    # Inject CSS
-    st.markdown(
-        f"""
-        <style>
-          .map-toolbar-fixed-{load_key} {{
-            position: fixed;
-            top: {top}px;
-            right: {right}px;
-            z-index: 9999;
-            background: #fff;
-            border: 1px solid #ccc;
-            border-radius: 4px;
-            box-shadow: 0 1px 5px rgba(0,0,0,0.65);
-            padding: 6px;
-          }}
-          .map-toolbar-fixed-{load_key} [data-testid="stButton"] button {{
-            font-size: 12px;
-            padding: 4px 10px;
-          }}
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # Render toolbar wrapper
-    st.markdown(f'<div class="map-toolbar-fixed-{load_key}">', unsafe_allow_html=True)
-
-    col1, col2 = st.columns([1, 1])
-
-    with col1:
-        load_clicked = st.button("LOAD", key=f"btn_{load_key}")
-
-    with col2:
-        clear_clicked = st.button("CLEAR", key=f"btn_{clear_key}")
-
-    st.markdown("</div>", unsafe_allow_html=True)
-
-    return load_clicked, clear_clicked
-
-
 
 def draw_point():
     
@@ -203,7 +148,6 @@ def draw_line():
     if st.session_state.get("selected_route"):
         for line in st.session_state["selected_route"]:
             folium.PolyLine(locations=line).add_to(drawn_items)
-        st.markdown(st.session_state["selected_route"])
         bounds = set_bounds_route(st.session_state["selected_route"])
         m.fit_bounds(bounds)
 

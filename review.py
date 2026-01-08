@@ -58,8 +58,7 @@ def review_information():
 
         # Create map centered on the boundary center
         m = folium.Map(
-            location=[center[0], center[1]],
-            zoom_start=set_zoom(bounds)
+            location=[center[0], center[1]]
         )
 
         # Add ALL points to the map
@@ -70,6 +69,8 @@ def review_information():
                 tooltip="Uploaded Point"
             ).add_to(m)
 
+        m.fit_bounds(bounds)
+
         # Render map
         st_folium(m, width=700, height=400)
 
@@ -79,13 +80,13 @@ def review_information():
         coords = st.session_state["selected_route"]
 
         # Compute bounding box
-        bounds = set_bounds_boundary(coords)
+        bounds = set_bounds_route(coords)
         center = set_center(bounds)
 
         # Create map centered on the boundary center
         m = folium.Map(
             location=[center[0], center[1]],
-            zoom_start=set_zoom(bounds)
+            zoom_start=set_zoom(bounds)-1
         )
 
         # Draw the boundary
@@ -95,6 +96,8 @@ def review_information():
             weight=8,
             opacity=1
         ).add_to(m)
+
+        m.fit_bounds(bounds)
 
         # Render map
         st_folium(m, width=700, height=400)
@@ -123,6 +126,7 @@ def review_information():
             opacity=1
         ).add_to(m)
 
+        m.fit_bounds(bounds)
 
         # Render map
         st_folium(m, width=700, height=400)

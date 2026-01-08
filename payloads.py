@@ -284,18 +284,26 @@ def geometry_payload(globalid: str):
 
             points = st.session_state["selected_point"]
 
+            
             def normalize_points(p):
+                """Extract all valid [lat, lon] pairs from any nesting depth."""
                 flat = []
-                if isinstance(p, (list, tuple)) and len(p) == 2:
-                    return [p]
-                for item in p:
-                    if isinstance(item, (list, tuple)) and len(item) == 2:
+
+                def extract(item):
+                    # Case: valid coordinate pair
+                    if isinstance(item, (list, tuple)) and len(item) == 2 \
+                    and all(isinstance(v, (int, float)) for v in item):
                         flat.append(item)
-                    else:
+                        return
+
+                    # Case: any iterable -> search deeper
+                    if isinstance(item, (list, tuple)):
                         for sub in item:
-                            if isinstance(sub, (list, tuple)) and len(sub) == 2:
-                                flat.append(sub)
+                            extract(sub)
+
+                extract(p)
                 return flat
+
 
             flat_points = normalize_points(points)
 
@@ -336,22 +344,35 @@ def geometry_payload(globalid: str):
 
             route = st.session_state["selected_route"]
 
-            def normalize_to_paths(r):
+            # --- FIXED NORMALIZER ---
+            def normalize_paths(r):
+                """
+                Ensures the route is a list of paths, each path a list of [lat, lon] pairs.
+                Removes extra nesting and enforces correct structure.
+                """
+                # Case 1: Single path: [[lat, lon], [lat, lon]]
                 if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in r):
                     return [r]
-                paths = []
+
+                # Case 2: Already list of paths
+                cleaned = []
                 for item in r:
                     if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in item):
-                        paths.append(item)
+                        cleaned.append(item)
                     else:
+                        # Flatten one more level if needed
                         for sub in item:
                             if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in sub):
-                                paths.append(sub)
-                return paths
+                                cleaned.append(sub)
+                return cleaned
 
-            paths_latlon = normalize_to_paths(route)
+            # Normalize input geometry
+            paths_latlon = normalize_paths(route)
 
+            # Build payloads
             for path in paths_latlon:
+
+                # Convert [lat, lon] → [x, y] = [lon, lat]
                 agol_path = [[pt[1], pt[0]] for pt in path]
 
                 payload = {
@@ -367,16 +388,18 @@ def geometry_payload(globalid: str):
                                 "parentglobalid": globalid
                             },
                             "geometry": {
-                                "paths": [agol_path],
+                                "paths": [agol_path],   # ← now correct, no extra nesting
                                 "spatialReference": {"wkid": 4326}
                             }
                         }
                     ]
                 }
 
+                st.session_state['debug'] = payload
                 payloads.append(clean_payload(payload))
 
             return payloads
+
 
 
         # ---------------------------------------------------------
