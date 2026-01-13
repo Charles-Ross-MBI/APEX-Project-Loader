@@ -159,7 +159,7 @@ elif st.session_state.step == 4:
     st.markdown("<h5>Choose Project Type</h5>", unsafe_allow_html=True)
     st.session_state['project_type'] = st.segmented_control(
         "Select Project Type:",
-        ["Site Project", "Route Project", "Boundary Projcet"],
+        ["Site Project", "Route Project", "Boundary Project"],
         default=st.session_state.get('project_type', None)  # persist previous choice
     )
 
