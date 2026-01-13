@@ -248,6 +248,25 @@ def _render_original_form(is_awp: bool):
         return v
 
     with st.form(form_key):
+        
+        spacer1, info1, info2, spacer3 = st.columns([3, 8, 8, 3])
+
+        with info1:
+            st.markdown(
+                "<div style='text-align:center; font-size:16px;'>◈ AASHTOWare Connected Fields</div>",
+                unsafe_allow_html=True
+            )
+
+        with info2:
+            st.markdown(
+                "<div style='text-align:center; font-size:16px;'>⮜ Required Fields</div>",
+                unsafe_allow_html=True
+            )
+
+        st.write("")
+
+
+
         st.markdown("<h5>1. PROJECT NAME </h4>", unsafe_allow_html=True)
         # Project Names
         if is_awp:
