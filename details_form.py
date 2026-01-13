@@ -476,7 +476,7 @@ def _render_original_form(is_awp: bool):
         awp_tenadd = st.session_state.get("awp_tentative_advertising_date", None)
         default_tenadd = awp_tenadd.date() if isinstance(awp_tenadd, datetime.datetime) else awp_tenadd if isinstance(awp_tenadd, datetime.date) else datetime.datetime.fromisoformat(awp_tenadd).date() if isinstance(awp_tenadd, str) and awp_tenadd.strip() else None
         st.session_state["tenadd"] = st.date_input(
-            "Tentative Advertise Date",
+            label=label,
             format="MM/DD/YYYY",
             value=default_tenadd,
             help = "The tentative advertised date represents the preliminary target month and year when the project is expected to be publicly posted for contractor bidding. " \
