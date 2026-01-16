@@ -42,7 +42,7 @@ def aashtoware_point(lat: float, lon: float):
     # ✅ Update session_state if valid point
     if lat and lon:
         try:
-            st.session_state["selected_point"] = [round(float(lat), 6), round(float(lon), 6)]
+            st.session_state["selected_point"] = [[round(float(lat), 6), round(float(lon), 6)]]
         except Exception:
             st.session_state["selected_point"] = None
 
