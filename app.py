@@ -153,7 +153,7 @@ elif st.session_state.step == 4:
     st.write("")
     st.write("")
     
-    load_geometry_app
+    load_geometry_app()
     
 
 
