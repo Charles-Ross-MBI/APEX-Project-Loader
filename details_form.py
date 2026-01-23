@@ -443,8 +443,11 @@ def aashtoware_project():
             st.session_state["aashto_id"] = active_gid
             st.session_state["aashto_label"] = active_label
             st.session_state["aashto_selected_project"] = active_label
+            
             # keep widget display in sync (BUT don't depend on on_change)
-            st.session_state[widget_key] = active_label
+            if widget_key not in st.session_state and active_label:
+                st.session_state[widget_key] = active_label
+
 
     # -------------------------------------------------------------------------
     # 2) Determine displayed selection
