@@ -1,26 +1,72 @@
+
+"""
+===============================================================================
+AGOL UTILITIES (STREAMLIT) — AUTH, QUERY, AND APPLYEDITS HELPERS
+===============================================================================
+
+Purpose:
+    Centralizes ArcGIS Online (AGOL) REST API helpers used by the Streamlit app:
+      - Token generation (username/password stored in st.session_state)
+      - Common query helpers (query_record, select_record, get_multiple_fields,
+        get_unique_field_values)
+      - Delete helpers (delete_project)
+      - Geometry-intersection query wrapper (AGOLQueryIntersect)
+      - Feature upload wrapper using applyEdits (AGOLDataLoader)
+
+Key behaviors:
+    - Authentication:
+        * get_agol_token() requests an AGOL token via generateToken endpoint
+        * Uses st.session_state['AGOL_USERNAME'] and ['AGOL_PASSWORD']
+    - Querying:
+        * SQL-like where queries against /query endpoints
+        * Optional geometry return + output spatial reference set to WKID 4326
+    - Payload uploads:
+        * AGOLDataLoader.add_features() sends applyEdits 'adds' as JSON
+        * Parses addResults, aggregates failures, and returns success/message/globalids
+    - Geometry intersections:
+        * AGOLQueryIntersect supports a single geometry OR a list of geometries
+        * Swaps [lat, lon] -> [lon, lat] to match ArcGIS x/y conventions
+        * Executes multiple queries and merges unique results
+
+Session-state dependencies (expected at runtime):
+    - Credentials (required for all authenticated operations):
+        * 'AGOL_USERNAME'
+        * 'AGOL_PASSWORD'
+
+Notes:
+    - This module performs network requests via requests (HTTP).
+    - Errors are surfaced as exceptions in most helpers; some functions return
+      False/None to allow callers to implement best-effort cleanup.
+    - Spatial reference is consistently treated as WGS84 (WKID 4326).
+
+===============================================================================
+"""
+
 import json
 import requests
 import streamlit as st
 import logging
 
-# import os
-# from dotenv import load_dotenv
-# load_dotenv()
-# agol_username = os.getenv("AGOL_USERNAME")
-# agol_password = os.getenv("AGOL_PASSWORD")
 
-# agol_username = st.secrets["AGOL_USERNAME"]
-# agol_password = st.secrets["AGOL_PASSWORD"]
-
-
-aashtoware = 'https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer'
-mileposts = 'https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer'
-
-
+# =============================================================================
+# IDENTIFIER HELPERS
+# =============================================================================
+# format_guid():
+#   - Normalizes GlobalID/GUID formatting to the ArcGIS curly-brace convention
+#   - Accepts either a string or a single-element list of strings
+# =============================================================================
 def format_guid(value) -> str:
     """
     Ensures a GUID/GlobalID value is in the correct ArcGIS format.
-    Accepts either a string or a single-element list of strings.
+
+    Accepted input:
+        - str: "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" (with or without braces)
+        - list[str]: single-element list returned by some ArcGIS responses
+
+    Returns:
+        str | None:
+            - A formatted string like "{xxxxxxxx-...}" when valid
+            - None when value is empty/invalid
     """
     # If it's a list, take the first element
     if isinstance(value, list):
@@ -39,22 +85,28 @@ def format_guid(value) -> str:
     return f"{{{clean_value}}}"
 
 
+# =============================================================================
+# AUTHENTICATION
+# =============================================================================
+# get_agol_token():
+#   - Requests a short-lived token from AGOL using stored credentials
+#   - Required by all subsequent query/edit operations
+# =============================================================================
 def get_agol_token() -> str:
     """
     Generates an authentication token for ArcGIS Online using a username and password.
 
-    Args:
-        username (str): The ArcGIS Online account username.
-        password (str): The corresponding account password.
+    Session-state requirements:
+        - st.session_state['AGOL_USERNAME']
+        - st.session_state['AGOL_PASSWORD']
 
     Returns:
         str: A valid authentication token used to make authorized API requests.
 
     Raises:
-        ValueError: If authentication fails or the token is not found in the response.
-        ConnectionError: If there is a network issue preventing communication with the API.
+        ValueError: If authentication fails or token missing from response.
+        ConnectionError: If requests cannot reach the AGOL endpoint.
     """
-    
     # ArcGIS Online token generation URL
     url = "https://www.arcgis.com/sharing/rest/generateToken"
 
@@ -65,7 +117,7 @@ def get_agol_token() -> str:
         "referer": "https://www.arcgis.com",  # Required reference for token generation
         "f": "json"  # Request response format
     }
-    
+
     try:
         # Send authentication request
         response = requests.post(url, data=data)
@@ -88,37 +140,111 @@ def get_agol_token() -> str:
     except requests.exceptions.RequestException as e:
         # Handle network-related errors
         raise ConnectionError(f"Failed to connect to ArcGIS Online: {e}")
-    
 
 
+# =============================================================================
+# QUERY HELPERS (GENERIC)
+# =============================================================================
+# query_record():
+#   - Executes a "where" query against an ArcGIS REST layer /query endpoint
+#   - Handles URL normalization to avoid double-appending the layer
+# =============================================================================
+def query_record(url: str, layer: int, where: str, fields="*", return_geometry=False):
+    """
+    Executes an SQL-style query against an ArcGIS REST API layer and returns matching records.
+
+    Parameters:
+        url: str
+            FeatureServer base URL (may or may not already include a layer segment).
+        layer: int
+            Layer index when url is a FeatureServer root.
+        where: str
+            SQL-like filter clause (e.g., "GlobalID='...'" or "1=1").
+        fields: str
+            outFields string. "*" requests all fields.
+        return_geometry: bool
+            Whether to return geometry in results.
+
+    Returns:
+        list: List of 'features' from the ArcGIS REST response.
+    """
+    token = get_agol_token()
+    if not token:
+        raise ValueError("Authentication failed: Invalid token.")
+
+    # Normalize URL so we don't double-append the layer
+    url = url.rstrip("/")
+
+    # If the URL already ends with the layer number, don't add it again
+    if url.split("/")[-1].isdigit():
+        query_url = f"{url}/query"
+    else:
+        query_url = f"{url}/{layer}/query"
+
+    params = {
+        "where": where,
+        "outFields": fields,
+        "returnGeometry": str(return_geometry).lower(),
+        "outSR": 4326,
+        "f": "json",
+        "token": token
+    }
+
+    response = requests.get(query_url, params=params)
+    if response.status_code != 200:
+        raise Exception(
+            f"Request failed with status code {response.status_code}: {response.text}"
+        )
+
+    data = response.json()
+    if "error" in data:
+        raise Exception(
+            f"API Error: {data['error']['message']} - {data['error'].get('details', [])}"
+        )
+
+    return data.get("features", [])
+
+
+# =============================================================================
+# QUERY HELPERS (FIELD VALUE UTILS)
+# =============================================================================
+# get_unique_field_values():
+#   - Requests distinct values for a field using returnDistinctValues=true
+#   - Optionally sorts values alphabetically or numerically
+# =============================================================================
 def get_unique_field_values(
     url: str,
     layer: str,
     field: str,
     where: str = "1=1",
-    sort_type: str = None,   # "alpha" or "numeric"
+    sort_type: str = None,  # "alpha" or "numeric"
     sort_order: str = "asc"  # "asc" or "desc"
 ) -> list:
     """
     Queries an ArcGIS REST API layer to retrieve all unique values from a specified field,
     with optional sorting.
 
-    Args:
-        url (str): The base URL of the ArcGIS REST API service.
-        layer (str): The layer ID or name to query.
-        field (str): The field name to retrieve unique values from.
-        where (str, optional): SQL-style filter expression. Defaults to "1=1" (all records).
-        sort_type (str, optional): "alpha" for alphabetical or "numeric" for numerical sorting.
-        sort_order (str, optional): "asc" for ascending or "desc" for descending. Defaults to "asc".
+    Parameters:
+        url: str
+            Base URL of the ArcGIS REST API service.
+        layer: str
+            Layer ID or name to query.
+        field: str
+            Field name to retrieve distinct values from.
+        where: str
+            SQL-style filter expression. Defaults to "1=1".
+        sort_type: str | None
+            "alpha" for alphabetical or "numeric" for numerical sorting.
+        sort_order: str
+            "asc" or "desc" (default "asc").
 
     Returns:
-        list: A list of unique values from the specified field, optionally sorted.
+        list: Unique values, optionally sorted.
 
     Raises:
-        ValueError: If authentication fails or the field does not exist.
-        Exception: If the API request fails or returns an error message.
+        ValueError: If authentication fails or field does not exist.
+        Exception: If request fails or the API returns an error.
     """
-
     try:
         # Authenticate and get API token (ensure agol_username and agol_password are defined)
         token = get_agol_token()
@@ -130,7 +256,7 @@ def get_unique_field_values(
             "where": where,
             "outFields": field,
             "returnDistinctValues": "true",  # ensures unique values
-            "returnGeometry": "false",       # no geometry needed
+            "returnGeometry": "false",  # no geometry needed
             "f": "json",
             "token": token
         }
@@ -138,7 +264,6 @@ def get_unique_field_values(
         # Formulate the query URL and execute the request
         query_url = f"{url}/{layer}/query"
         response = requests.get(query_url, params=params)
-
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}: {response.text}")
 
@@ -161,7 +286,6 @@ def get_unique_field_values(
         # Apply sorting if requested
         if sort_type:
             reverse = sort_order.lower() == "desc"
-
             if sort_type.lower() == "alpha":
                 unique_values.sort(key=lambda x: str(x).lower(), reverse=reverse)
             elif sort_type.lower() == "numeric":
@@ -178,22 +302,29 @@ def get_unique_field_values(
         raise ValueError(val_error)
     except Exception as gen_error:
         raise Exception(gen_error)
-    
 
 
-
-
+# =============================================================================
+# QUERY HELPERS (BULK FIELD RETRIEVAL)
+# =============================================================================
+# get_multiple_fields():
+#   - Retrieves a set of attributes for all features in a layer
+#   - Returns a list of dicts (attribute name -> value)
+# =============================================================================
 def get_multiple_fields(url: str, layer: int = 0, fields: list = None) -> list:
     """
     Queries an ArcGIS REST API table layer to retrieve records with specified fields.
 
-    Args:
-        url (str): The base URL of the ArcGIS REST API service.
-        layer (int): The layer ID to query. Defaults to 0.
-        fields (list): A list of field names to request from the service.
+    Parameters:
+        url: str
+            Base URL of the ArcGIS REST API service.
+        layer: int
+            Layer ID to query (default 0).
+        fields: list[str] | None
+            Field names to request. When None, requests "*".
 
     Returns:
-        list: A list of dictionaries with keys based on the feature attributes returned.
+        list[dict]: Attribute dictionaries for each returned feature.
     """
     try:
         token = get_agol_token()
@@ -202,7 +333,6 @@ def get_multiple_fields(url: str, layer: int = 0, fields: list = None) -> list:
 
         # If no fields provided, request all
         out_fields = ",".join(fields) if fields else "*"
-
         params = {
             "where": "1=1",
             "outFields": out_fields,
@@ -213,7 +343,6 @@ def get_multiple_fields(url: str, layer: int = 0, fields: list = None) -> list:
 
         query_url = f"{url}/{layer}/query"
         response = requests.get(query_url, params=params)
-
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}: {response.text}")
 
@@ -233,20 +362,32 @@ def get_multiple_fields(url: str, layer: int = 0, fields: list = None) -> list:
         raise Exception(f"Error retrieving project records: {e}")
 
 
-
-
-def select_record(url: str, layer: int, id_field: str, id_value: str, fields = "*", return_geometry = False):
+# =============================================================================
+# QUERY HELPERS (SINGLE RECORD)
+# =============================================================================
+# select_record():
+#   - Convenience wrapper for retrieving a single record by ID field/value
+# =============================================================================
+def select_record(url: str, layer: int, id_field: str, id_value: str, fields="*", return_geometry=False):
     """
     Queries an ArcGIS REST API table layer to retrieve a single record by ID field.
 
-    Args:
-        url (str): The base URL of the ArcGIS REST API service.
-        layer (int): The layer ID to query.
-        id_field (str): The name of the field to filter by (e.g., 'GlobalID', 'ProposalId').
-        id_value (str): The value to match in the ID field.
+    Parameters:
+        url: str
+            Base URL of the ArcGIS REST API service.
+        layer: int
+            Layer ID to query.
+        id_field: str
+            Field name to filter by (e.g., 'GlobalID', 'ProposalId').
+        id_value: str
+            Value to match in the ID field.
+        fields: str
+            outFields string ("*" for all fields).
+        return_geometry: bool
+            Whether to include geometry in response.
 
     Returns:
-        list: A list of matching feature dictionaries.
+        list: List of matching feature dictionaries (ArcGIS REST 'features').
     """
     try:
         token = get_agol_token()
@@ -264,7 +405,6 @@ def select_record(url: str, layer: int, id_field: str, id_value: str, fields = "
 
         query_url = f"{url}/{layer}/query"
         response = requests.get(query_url, params=params)
-
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}: {response.text}")
 
@@ -276,9 +416,15 @@ def select_record(url: str, layer: int, id_field: str, id_value: str, fields = "
 
     except Exception as e:
         raise Exception(f"Error retrieving project record: {e}")
-    
 
 
+# =============================================================================
+# DELETE HELPERS
+# =============================================================================
+# delete_project():
+#   - Calls deleteFeatures endpoint with a GlobalID where clause
+#   - Used as a best-effort cleanup step when a multi-step upload fails
+# =============================================================================
 def delete_project(url: str, layer: int, globalid: str) -> bool:
     """
     Delete a project from an ArcGIS Feature Service using its GlobalID.
@@ -287,18 +433,9 @@ def delete_project(url: str, layer: int, globalid: str) -> bool:
     a feature from the specified layer. It uses a `where` clause to match the
     provided GlobalID.
 
-    Args:
-        url (str): Base URL of the Feature Service (ending with /FeatureServer).
-        layer (int): Layer index within the Feature Service where the project resides.
-        globalid (str): The GlobalID of the project to delete.
-
     Returns:
-        bool: True if the project was successfully deleted, False otherwise.
-
-    Raises:
-        ValueError: If authentication fails or no token is retrieved.
+        bool: True if deletion was successful, False otherwise.
     """
-
     try:
         # Retrieve authentication token
         token = get_agol_token()
@@ -308,8 +445,8 @@ def delete_project(url: str, layer: int, globalid: str) -> bool:
         # Parameters for the deleteFeatures request
         params = {
             "where": f"GlobalID='{globalid}'",  # Filter by GlobalID
-            "f": "json",                        # Response format
-            "token": token                      # Authentication token
+            "f": "json",  # Response format
+            "token": token  # Authentication token
         }
 
         # Construct deleteFeatures endpoint URL
@@ -333,14 +470,16 @@ def delete_project(url: str, layer: int, globalid: str) -> bool:
         return False
 
 
-
-
-
-
+# =============================================================================
+# SPATIAL INTERSECT QUERY WRAPPER
+# =============================================================================
+# AGOLQueryIntersect:
+#   - Builds an intersects query against a layer, given point/line/polygon input
+#   - Supports running against multiple input geometries and merging results
+# =============================================================================
 class AGOLQueryIntersect:
     def __init__(self, url, layer, geometry, fields="*", return_geometry=False,
                  list_values=None, string_values=None):
-
         self.url = url
         self.layer = layer
 
@@ -373,6 +512,7 @@ class AGOLQueryIntersect:
             self.string_values = ",".join(map(str, unique_list))
 
     def _authenticate(self):
+        """Authenticate with AGOL and return a valid token."""
         token = get_agol_token()
         if not token:
             raise ValueError("Authentication failed: Invalid token.")
@@ -390,6 +530,17 @@ class AGOLQueryIntersect:
         return geometry
 
     def _build_geometry(self, geometry):
+        """
+        Convert input geometry list into ArcGIS JSON geometry dict and geometryType.
+
+        Supported:
+            - Point: [lon, lat] (after swap)
+            - Line : [[lon, lat], ...] (treated as polyline unless closed polygon)
+            - Polygon: [[lon, lat], ...] closed or auto-closed
+
+        Returns:
+            (geometry_dict, geometry_type_str)
+        """
         if not isinstance(geometry, list):
             raise ValueError("Invalid geometry: Geometry must be a list.")
 
@@ -467,7 +618,6 @@ class AGOLQueryIntersect:
 
         query_url = f"{self.url}/{self.layer}/query"
         response = requests.get(query_url, params=params)
-
         if response.status_code != 200:
             raise Exception(f"Request failed with status code {response.status_code}: {response.text}")
 
@@ -491,7 +641,6 @@ class AGOLQueryIntersect:
     def _execute_query_multiple(self):
         combined = []
         seen = set()
-
         for geom in self.geometry:
             result = self._execute_query(geom)
             for item in result:
@@ -499,28 +648,40 @@ class AGOLQueryIntersect:
                 if key not in seen:
                     seen.add(key)
                     combined.append(item)
-
         return combined
 
     def _extract_unique_values(self, field_name):
         """Return a unique list of values for the specified field. Blank if no results."""
         if not self.results:
             return []  # no features returned
+
         available_fields = {f for feature in self.results for f in feature["attributes"].keys()}
         if field_name not in available_fields:
             return []  # gracefully return blank list if field not found
-        values = [feature["attributes"].get(field_name) for feature in self.results if feature["attributes"].get(field_name) is not None]
+
+        values = [
+            feature["attributes"].get(field_name)
+            for feature in self.results
+            if feature["attributes"].get(field_name) is not None
+        ]
         return list(set(values))
 
-    
 
-
-
+# =============================================================================
+# APPLYEDITS UPLOADER
+# =============================================================================
+# AGOLDataLoader:
+#   - Wraps applyEdits adds for a specific service layer
+#   - Returns a consistent {success, message, globalids} structure to callers
+# =============================================================================
 class AGOLDataLoader:
     def __init__(self, url: str, layer: int):
         """
         Initialize the loader with AGOL service URL and layer ID.
-        Token is retrieved via _authenticate().
+
+        Notes:
+            - Token is retrieved via _authenticate().
+            - Logger is configured at INFO level for visibility in app logs.
         """
         self.url = url.rstrip("/")
         self.layer = layer
@@ -528,15 +689,13 @@ class AGOLDataLoader:
         self.success = False
         self.message = None
         self.globalids = []
-        
+
         # Configure logging
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger("AGOLDataLoader")
 
     def _authenticate(self):
-        """
-        Authenticate with AGOL and return a valid token.
-        """
+        """Authenticate with AGOL and return a valid token."""
         token = get_agol_token()
         if not token:
             raise ValueError("Authentication failed: Invalid token.")
@@ -545,8 +704,15 @@ class AGOLDataLoader:
     def add_features(self, payload: dict):
         """
         Add features to the AGOL feature layer using applyEdits.
-        Logs stages and sets success/message/globalids.
-        Rolls back if unsuccessful.
+
+        Behavior:
+            - POSTs to /applyEdits with adds payload JSON
+            - Parses addResults for success/failure
+            - Aggregates error messages when failures occur
+            - Returns a consistent result dictionary
+
+        Returns:
+            dict: { "success": bool, "message": str, "globalids": list }
         """
         endpoint = f"{self.url}/{self.layer}/applyEdits"
         self.logger.info("Starting add_features process...")
@@ -561,6 +727,7 @@ class AGOLDataLoader:
                     "adds": json.dumps(payload["adds"])
                 }
             )
+
             self.logger.info("Raw response text: %s", resp.text)
             result = resp.json()
 
@@ -589,6 +756,7 @@ class AGOLDataLoader:
                         r.get("globalId") for r in add_results if r.get("success")
                     ]
                     self.logger.info(self.message)
+
             else:
                 self.success = False
                 self.message = f"Unexpected response: {result}"

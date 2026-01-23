@@ -9,7 +9,7 @@ import streamlit as st
 from streamlit_folium import st_folium
 import folium
 from folium.plugins import Draw, Geocoder
-from map import add_small_geocoder, set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom
+from map_util import add_small_geocoder, set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom
 
 
 

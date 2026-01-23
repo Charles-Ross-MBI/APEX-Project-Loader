@@ -1,7 +1,7 @@
 import streamlit as st
 from streamlit_folium import st_folium
 import folium
-from map import add_small_geocoder, add_bottom_message
+from map_util import add_small_geocoder, add_bottom_message
 from agol_util import get_unique_field_values
 
 

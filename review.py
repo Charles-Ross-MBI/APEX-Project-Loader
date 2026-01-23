@@ -2,7 +2,7 @@
 import streamlit as st
 from streamlit_folium import st_folium
 import folium
-from map import set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom, set_center
+from map_util import set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom, set_center
 
 
 # ----------------------------------------------------------------------
@@ -159,7 +159,8 @@ def review_information():
         col1.markdown(f"**IRIS:** {st.session_state.get('iris','')}")
         col2.markdown(f"**STIP:** {st.session_state.get('stip','')}")
         col1.markdown(f"**Federal Project Number:** {st.session_state.get('fed_proj_num','')}")
-        col2.markdown(f"**Practice:** {st.session_state.get('proj_prac','')}")
+        col2.markdown(f"**Fund Type:** {st.session_state.get('fund_type','')}")
+        col1.markdown(f"**Practice:** {st.session_state.get('proj_prac','')}")
         
     # Timeline
     with st.expander("Timeline", expanded=True):
@@ -168,30 +169,46 @@ def review_information():
         col2.markdown(f"**Anticipated End:** {st.session_state.get('anticipated_end','')}")
 
     # Funding
-    with st.expander("Funding", expanded=True):
+    with st.expander("Award Information", expanded=True):
         col1, col2 = st.columns(2)
-        col1.markdown(f"**Fund Type:** {st.session_state.get('fund_type','')}")
-        col2.markdown(f"**Fund Amount:** {st.session_state.get('fund_amount','')}")
-        col1.markdown(f"**Awarded:** {st.session_state.get('awarded','')}")
-        col2.markdown(f"**Award Fiscal Year:** {st.session_state.get('award_fiscal_year','')}")
+        
         col1.markdown(f"**Award Date:** {st.session_state.get('award_date','')}")
-        col2.markdown(f"**Contractor:** {st.session_state.get('contractor','')}")
-        col1.markdown(
+        col2.markdown(f"**Award Fiscal Year:** {st.session_state.get('award_fiscal_year','')}")
+        col1.markdown(f"**Contractor:** {st.session_state.get('contractor','')}")
+        col2.markdown(
             "**Awarded Amount:** "
-            + (("${:,.0f}".format(float(st.session_state.get("awarded_amount", 0))))
-               if st.session_state.get("awarded_amount") not in (None, "") else "")
+            + (
+                # If number → currency format
+                "${:,.0f}".format(st.session_state["awarded_amount"])
+                if isinstance(st.session_state.get("awarded_amount"), (int, float))
+                # If string → print raw
+                else st.session_state.get("awarded_amount")
+                if isinstance(st.session_state.get("awarded_amount"), str)
+                # Otherwise → blank
+                else ""
+            )
+        )
+        col1.markdown(
+            "**Current Contract Amount:** "
+            + (
+                "${:,.0f}".format(st.session_state["current_contract_amount"])
+                if isinstance(st.session_state.get("current_contract_amount"), (int, float))
+                else st.session_state.get("current_contract_amount")
+                if isinstance(st.session_state.get("current_contract_amount"), str)
+                else ""
+            )
         )
         col2.markdown(
-            "**Current Contract Amount:** "
-            + (("${:,.0f}".format(float(st.session_state.get("current_contract_amount", 0))))
-               if st.session_state.get("current_contract_amount") not in (None, "") else "")
-        )
-        col1.markdown(
             "**Amount Paid to Date:** "
-            + (("${:,.0f}".format(float(st.session_state.get("amount_paid_to_date", 0))))
-               if st.session_state.get("amount_paid_to_date") not in (None, "") else "")
+            + (
+                "${:,.0f}".format(st.session_state["amount_paid_to_date"])
+                if isinstance(st.session_state.get("amount_paid_to_date"), (int, float))
+                else st.session_state.get("amount_paid_to_date")
+                if isinstance(st.session_state.get("amount_paid_to_date"), str)
+                else ""
+            )
         )
-        col2.markdown(f"**Tenative Advertise Date:** {st.session_state.get('tenadd','')}")
+        col1.markdown(f"**Tenative Advertise Date:** {st.session_state.get('tenadd','')}")
 
 
     # Narrative

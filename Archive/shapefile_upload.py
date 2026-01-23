@@ -12,7 +12,7 @@ import zipfile
 from streamlit_folium import st_folium
 import folium
 import geopandas as gpd
-from map import add_small_geocoder, set_bounds_route, add_bottom_message, set_zoom
+from map_util import add_small_geocoder, set_bounds_route, add_bottom_message, set_zoom
 
 
 def point_shapefile():

@@ -1,15 +1,89 @@
+
+"""
+===============================================================================
+PAYLOAD BUILDERS (STREAMLIT) — APEX / AGOL APPLYEDITS PAYLOAD FACTORIES
+===============================================================================
+
+Purpose:
+    Provides helper utilities and payload factory functions used to construct
+    ArcGIS "applyEdits" payloads for uploading project-related data into APEX
+    (AGOL-backed) feature layers.
+
+    This module is called by the upload orchestration layer (e.g., load_project.py)
+    to build per-layer payloads based on current st.session_state values.
+
+Key behaviors:
+    - Payload normalization and cleaning:
+        * clean_payload(): removes attributes that are None, 0, or '' to reduce
+          noise and avoid overwriting values with empty defaults.
+        * clean_payloads(): removes attributes explicitly marked "REMOVE".
+    - Type conversion helpers:
+        * to_date_string(): normalizes date/datetime to YYYY-MM-DD string form.
+        * str_to_int(): converts currency-like strings into integers.
+    - Geometry center helpers:
+        * get_point_center(), get_line_center(), get_polygon_center(): compute
+          representative (lon, lat) centers for display/point geometry fields.
+    - Payload builders (ArcGIS applyEdits schema):
+        * project_payload(): main project record with a representative point.
+        * geometry_payload(): child geometry records for site/route/boundary.
+        * communities_payload(): optional impacted communities child records.
+        * contacts_payload(): optional contacts child records.
+        * geography_payload(): optional geography overlays (region/borough/senate/
+          house/route) sourced by querying reference services.
+
+Session-state dependencies (selected examples; see each builder for details):
+    - Geometry selection:
+        'selected_point' | 'selected_route' | 'selected_boundary'
+    - Project attributes:
+        'proj_name', 'proj_desc', 'phase', 'fund_type', etc.
+    - Geography selections:
+        '{name}_list' keys (e.g., 'region_list', 'borough_list', ...)
+    - Communities:
+        'impact_comm_ids'
+    - Contacts:
+        'project_contacts'
+
+Notes:
+    - This module intentionally raises/returns None in a few "valid empty" cases:
+        * communities_payload(): returns None when nothing exists to add.
+        * contacts_payload(): returns None when no contacts exist.
+        * geometry_payload(): returns None when no geometry selection exists.
+        * geography_payload(): returns None when no payload was assembled.
+    - Shapely is used for center computation; payload geometry structures are
+      formatted as ArcGIS JSON (wkid 4326).
+
+===============================================================================
+"""
+
 import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
 import datetime
 from agol_util import select_record
 
+# =============================================================================
+# PAYLOAD CLEANING / NORMALIZATION HELPERS
+# =============================================================================
+# These helpers standardize outgoing payloads:
+# - Remove empty values that should not be written (None/0/"")
+# - Remove sentinel values used to indicate explicit removal ("REMOVE")
+# =============================================================================
 def clean_payload(payload: dict) -> dict:
     """
     Remove any attributes set to None, 0, or ''.
+
+    Why:
+        ArcGIS applyEdits payloads are sensitive to "empty" values. Filtering
+        these prevents overwriting or storing meaningless defaults.
+
+    Parameters:
+        payload: dict
+            A standard applyEdits-like payload dict containing 'adds'.
+
+    Returns:
+        dict: A cleaned payload with filtered 'attributes' per add entry.
     """
     cleaned = dict(payload)
     new_adds = []
-
     for add in payload.get("adds", []):
         attrs = add.get("attributes", {})
         filtered_attrs = {
@@ -19,59 +93,111 @@ def clean_payload(payload: dict) -> dict:
         new_add = dict(add)
         new_add["attributes"] = filtered_attrs
         new_adds.append(new_add)
-
     cleaned["adds"] = new_adds
     return cleaned
+
 
 def to_date_string(value):
     """
     Convert a datetime.date or datetime.datetime to a string.
-    - If value is "REMOVE", return "REMOVE".
-    - If value is None or not a valid date/datetime, return "REMOVE".
-    - Otherwise return an ISO 8601 string (YYYY-MM-DD).
+
+    Behavior:
+        - If value is already a string, return it unchanged.
+        - If value is None, return None.
+        - If value is a date/datetime, return YYYY-MM-DD.
+        - Otherwise return None.
+
+    Rationale:
+        ArcGIS services often prefer consistent date string formats when using
+        attribute payloads (or when upstream sources produce mixed types).
     """
     if value is None:
         return None
-
+    # If it's already a string, assume it's a date string and return as-is
+    if isinstance(value, str):
+        return value
+    # If it's a date (but not datetime), promote to datetime
     if isinstance(value, datetime.date) and not isinstance(value, datetime.datetime):
-        # Promote date to datetime at midnight
         value = datetime.datetime.combine(value, datetime.time())
-
+    # If it's a datetime, format it
     if isinstance(value, datetime.datetime):
         return value.strftime("%Y-%m-%d")
-
     # Anything else is invalid
-    return 
+    return None
+
+
+def str_to_int(value):
+    """
+    Convert a value to an integer if it's a string.
+
+    Behavior:
+        - If value is already an int, return it unchanged.
+        - If value is a string, strip $, commas, and decimals, then convert.
+        - If conversion fails, return the original value.
+
+    Notes:
+        This allows number inputs to come from either numeric widgets or
+        pre-formatted strings (e.g., "$12,345.00").
+    """
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        cleaned = value.strip()
+        cleaned = cleaned.replace("$", "").replace(",", "")
+        # Remove decimal portion if present
+        if "." in cleaned:
+            cleaned = cleaned.split(".")[0]
+        try:
+            return int(cleaned)
+        except ValueError:
+            return value
+    return value
 
 
 def _average_centers(centers):
+    """
+    Average a list of (lon, lat) pairs into a single (lon, lat) center.
+
+    Raises:
+        ValueError: if centers is empty.
+    """
     if not centers:
         raise ValueError("No centers provided.")
-
     xs = [c[0] for c in centers]
     ys = [c[1] for c in centers]
-
     return (sum(xs) / len(xs), sum(ys) / len(ys))  # (lon, lat)
 
 
-
+# =============================================================================
+# GEOMETRY CENTER COMPUTATION
+# =============================================================================
+# These helpers compute representative centers used for:
+# - Project point geometry (for map display / indexing)
+# - Consistent location when an input geometry is multi-part
+#
+# IMPORTANT:
+# - Input coordinate convention is treated as [lat, lon] in several places.
+# - Returns are (lon, lat) to match ArcGIS x/y expectation.
+# =============================================================================
 def get_point_center(points):
     """
-    Given:
-      - A single point [lat, lon]
-      - A list of points [[lat, lon], ...]
-      - A list of point groups [[[lat, lon], ...], ...]
+    Compute a representative center for point geometry input.
 
-    Return:
-      - A single (lon, lat) tuple representing the center point.
+    Accepted input shapes:
+        - A single point: [lat, lon]
+        - A list of points: [[lat, lon], ...]
+        - A list of point groups: [[[lat, lon], ...], ...]
+
+    Returns:
+        (lon, lat): tuple
+            A single center point in ArcGIS-friendly order.
     """
-
     # Normalize to flat list of [lat, lon]
     flat_points = []
 
     # Single point [lat, lon]
     if isinstance(points, (list, tuple)) and len(points) == 2 and \
-       all(isinstance(x, (int, float)) for x in points):
+            all(isinstance(x, (int, float)) for x in points):
         flat_points.append(points)
     else:
         # List or nested list
@@ -94,31 +220,28 @@ def get_point_center(points):
     # Multiple points → average center
     lats = [float(pt[0]) for pt in flat_points]
     lons = [float(pt[1]) for pt in flat_points]
-
     center_lat = sum(lats) / len(lats)
     center_lon = sum(lons) / len(lons)
-
     return (center_lon, center_lat)  # (lon, lat)
-
 
 
 def get_line_center(line_geom):
     """
-    Given:
-      - A single LineString or list of coordinates
-      - A list of LineStrings / coordinate lists
+    Compute a representative center for line geometry input.
 
-    Return:
-      - A single (lon, lat) tuple representing the center of centers.
+    Accepted input shapes:
+        - A single LineString or list of coordinates
+        - A list of LineStrings / coordinate lists
+
+    Returns:
+        (lon, lat): tuple
+            Center point (or "center of centers" for multi-part lines).
     """
-
     def _center_single_line(g):
         if isinstance(g, list):
             g = LineString(g)
-
         if not isinstance(g, LineString):
             raise ValueError("Geometry must be a LineString or list of coordinates")
-
         midpoint_distance = g.length / 2.0
         center = g.interpolate(midpoint_distance)
         return (center.x, center.y)  # (lon, lat)
@@ -134,24 +257,23 @@ def get_line_center(line_geom):
     return _center_single_line(line_geom)
 
 
-
 def get_polygon_center(poly_geom):
     """
-    Given:
-      - A single Polygon or list of coordinates
-      - A list of Polygons / coordinate lists
+    Compute a representative center for polygon geometry input.
 
-    Return:
-      - A single (lon, lat) tuple representing the center of centers.
+    Accepted input shapes:
+        - A single Polygon or list of coordinates
+        - A list of Polygons / coordinate lists
+
+    Returns:
+        (lon, lat): tuple
+            Centroid (or "center of centers" for multi-part polygons).
     """
-
     def _center_single_polygon(g):
         if isinstance(g, list):
             g = Polygon(g)
-
         if not isinstance(g, Polygon):
             raise ValueError("Geometry must be a Polygon or list of coordinates")
-
         c = g.centroid
         return (c.x, c.y)  # (lon, lat)
 
@@ -166,13 +288,22 @@ def get_polygon_center(poly_geom):
     return _center_single_polygon(poly_geom)
 
 
-
-
-
-
 def clean_payloads(payloads: dict) -> dict:
     """
     Remove any attribute entries marked as 'REMOVE'.
+
+    Why:
+        Some upstream flows may set an attribute to a sentinel string ("REMOVE")
+        to indicate it should not be written. This helper strips those values
+        while preserving any associated geometry.
+
+    Parameters:
+        payloads: dict
+            A dict of payload objects, each expected to contain a 'payload' with
+            an 'adds' list.
+
+    Returns:
+        dict: A new dict with filtered attributes.
     """
     cleaned = {}
     for key, payload in payloads.items():
@@ -191,7 +322,14 @@ def clean_payloads(payloads: dict) -> dict:
     return cleaned
 
 
-
+# =============================================================================
+# PAYLOAD BUILDER: PROJECT
+# =============================================================================
+# project_payload():
+# - Determines a representative center based on selected geometry
+# - Builds the "projects" layer payload
+# - Uses clean_payload() to remove empty attributes before upload
+# =============================================================================
 def project_payload():
     try:
         # Determine center based on selected geometry
@@ -230,9 +368,9 @@ def project_payload():
                         "Award_Date": to_date_string(st.session_state.get("award_date", None)),
                         "Award_Fiscal_Year": st.session_state.get("award_fiscal_year", None),
                         "Contractor": st.session_state.get("contractor", None),
-                        "Awarded_Amount": st.session_state.get("awarded_amount", None),
-                        "Current_Contract_Amount": st.session_state.get("current_contract_amount", None),
-                        "Amount_Paid_to_Date": st.session_state.get("amount_paid_to_date", None),
+                        "Awarded_Amount": str_to_int(st.session_state.get("awarded_amount", None)),
+                        "Current_Contract_Amount": str_to_int(st.session_state.get("current_contract_amount", None)),
+                        "Amount_Paid_to_Date": str_to_int(st.session_state.get("amount_paid_to_date", None)),
                         "Anticipated_Start": st.session_state.get("anticipated_start", None),
                         "Anticipated_End": st.session_state.get("anticipated_end", None),
                         "Construction_Year": st.session_state.get("construction_year", None),
@@ -260,31 +398,30 @@ def project_payload():
                 }
             ]
         }
-
-    
         return clean_payload(payload)
-
     except Exception as e:
         # Bubble up error so caller can handle with st.error
         raise RuntimeError(f"Error building project payload: {e}")
-    
 
 
-
-
+# =============================================================================
+# PAYLOAD BUILDER: GEOMETRY (SITES / ROUTES / BOUNDARIES)
+# =============================================================================
+# geometry_payload():
+# - Builds one or more child geometry records based on the selected geometry type
+# - Normalizes nesting for points, routes (paths), and boundaries (rings)
+# - Returns a list of cleaned payloads (one per geometry) or None if no selection
+# =============================================================================
 def geometry_payload(globalid: str):
-
     try:
         payloads = []  # final list of cleaned payloads
 
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         # POINT CASE
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         if st.session_state.get("selected_point"):
-
             points = st.session_state["selected_point"]
 
-            
             def normalize_points(p):
                 """Extract all valid [lat, lon] pairs from any nesting depth."""
                 flat = []
@@ -292,10 +429,9 @@ def geometry_payload(globalid: str):
                 def extract(item):
                     # Case: valid coordinate pair
                     if isinstance(item, (list, tuple)) and len(item) == 2 \
-                    and all(isinstance(v, (int, float)) for v in item):
+                            and all(isinstance(v, (int, float)) for v in item):
                         flat.append(item)
                         return
-
                     # Case: any iterable -> search deeper
                     if isinstance(item, (list, tuple)):
                         for sub in item:
@@ -304,9 +440,7 @@ def geometry_payload(globalid: str):
                 extract(p)
                 return flat
 
-
             flat_points = normalize_points(points)
-
             if not flat_points:
                 raise ValueError("No valid point geometry found.")
 
@@ -331,17 +465,13 @@ def geometry_payload(globalid: str):
                         }
                     ]
                 }
-
                 payloads.append(clean_payload(payload))
-
             return payloads
 
-
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         # ROUTE CASE (POLYLINES)
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         elif st.session_state.get("selected_route"):
-
             route = st.session_state["selected_route"]
 
             # --- FIXED NORMALIZER ---
@@ -371,10 +501,8 @@ def geometry_payload(globalid: str):
 
             # Build payloads
             for path in paths_latlon:
-
                 # Convert [lat, lon] → [x, y] = [lon, lat]
                 agol_path = [[pt[1], pt[0]] for pt in path]
-
                 payload = {
                     "adds": [
                         {
@@ -388,25 +516,20 @@ def geometry_payload(globalid: str):
                                 "parentglobalid": globalid
                             },
                             "geometry": {
-                                "paths": [agol_path],   # ← now correct, no extra nesting
+                                "paths": [agol_path],  # ← now correct, no extra nesting
                                 "spatialReference": {"wkid": 4326}
                             }
                         }
                     ]
                 }
-
                 st.session_state['debug'] = payload
                 payloads.append(clean_payload(payload))
-
             return payloads
 
-
-
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         # BOUNDARY CASE (POLYGONS)
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         elif st.session_state.get("selected_boundary"):
-
             boundary = st.session_state["selected_boundary"]
 
             def normalize_to_rings(b):
@@ -423,12 +546,10 @@ def geometry_payload(globalid: str):
                 return rings
 
             rings_latlon = normalize_to_rings(boundary)
-
             for ring in rings_latlon:
                 converted = [[pt[1], pt[0]] for pt in ring]
                 if converted[0] != converted[-1]:
                     converted.append(converted[0])
-
                 payload = {
                     "adds": [
                         {
@@ -448,30 +569,34 @@ def geometry_payload(globalid: str):
                         }
                     ]
                 }
-
                 payloads.append(clean_payload(payload))
-
             return payloads
 
-
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         # NOTHING SELECTED
-        # ---------------------------------------------------------
+        # ---------------------------------------------------------------------
         else:
             return None
-
     except Exception as e:
         st.error(f"Error building geometry payload: {e}")
         return None
 
-    
 
-
-
+# =============================================================================
+# PAYLOAD BUILDER: IMPACTED COMMUNITIES (OPTIONAL)
+# =============================================================================
 def communities_payload(globalid: str):
     """
     Build an ArcGIS applyEdits payload for impacted communities.
-    Returns None if no impacted communities exist or no valid records are found.
+
+    Returns:
+        dict | None:
+            - dict: cleaned payload containing 'adds' for each resolved community
+            - None: when there are no impacted communities, or no usable records
+
+    Notes:
+        - Communities are resolved via select_record() against a reference service.
+        - Records with missing required fields are skipped rather than failing.
     """
     try:
         comm_list = st.session_state.get("impact_comm_ids", None)
@@ -485,7 +610,6 @@ def communities_payload(globalid: str):
             "All_Alaska_Communities_Baker/FeatureServer"
         )
 
-        
         for comm_id in comm_list:
             comms_data = select_record(
                 comms_url,
@@ -494,7 +618,6 @@ def communities_payload(globalid: str):
                 str(comm_id),
                 fields="OverallName,Latitude,Longitude"
             )
-
             if not comms_data:
                 # Skip silently if no record found
                 continue
@@ -503,7 +626,6 @@ def communities_payload(globalid: str):
             name = attrs.get("OverallName")
             y = attrs.get("Latitude")
             x = attrs.get("Longitude")
-
             if name and y is not None and x is not None:
                 payload["adds"].append({
                     "attributes": {
@@ -523,16 +645,25 @@ def communities_payload(globalid: str):
             return None
 
         return clean_payload(payload)
-
     except Exception as e:
         st.error(f"Error building communities payload: {e}")
-        return 
-    
+        return
 
 
+# =============================================================================
+# PAYLOAD BUILDER: CONTACTS (OPTIONAL)
+# =============================================================================
 def contacts_payload(globalid: str):
-    try: 
-        contact_list = st.session_state.get("contacts", None)
+    """
+    Build an ArcGIS applyEdits payload for project contacts.
+
+    Returns:
+        dict | None:
+            - dict: cleaned payload containing one add per contact
+            - None: when no contacts exist in session_state
+    """
+    try:
+        contact_list = st.session_state.get("project_contacts", None)
         if not contact_list:
             return None
 
@@ -549,35 +680,36 @@ def contacts_payload(globalid: str):
                     "parentglobalid": globalid
                 }
             })
-
         return clean_payload(payload)
-
     except Exception as e:
         st.error(f"Error building contacts payload: {e}")
         return
 
 
-
-
+# =============================================================================
+# PAYLOAD BUILDER: GEOGRAPHY (OPTIONAL OVERLAYS)
+# =============================================================================
 def geography_payload(globalid: str, name: str):
     """
     Build a payload containing attributes and geometry for a given geography type.
 
-    Parameters
-    ----------
-    globalid : str
-        The parent GlobalID to associate with the payload.
-    name : str
-        The geography type to process. Must be one of:
-        'region', 'borough', 'senate', or 'house'.
+    Parameters:
+        globalid: str
+            The parent GlobalID to associate with the payload.
+        name: str
+            The geography type to process. Supported values include:
+            'region', 'borough', 'senate', 'house', and 'route'.
 
-    Returns
-    -------
-    dict
-        A cleaned payload dictionary containing 'adds' entries with
-        attributes and geometry for the specified geography type.
+    Returns:
+        dict | None:
+            - dict: cleaned payload with 'adds' entries containing attributes + geometry
+            - None: when no payload could be assembled (no IDs or no results)
+
+    Mechanism:
+        - IDs are read from st.session_state[f"{name}_list"]
+        - Records are fetched from an AGOL reference service via select_record()
+        - The returned geometry is passed through directly into the outgoing payload
     """
-
     # Dictionary of services keyed by geography name, with base URL and layer index
     geography_dict = {
         "region": {
@@ -604,12 +736,15 @@ def geography_payload(globalid: str, name: str):
 
     payload = {}
 
+    # -------------------------------------------------------------------------
     # REGION
+    # -------------------------------------------------------------------------
     if name == 'region':
         id_list = st.session_state.get(f"{name}_list")
         service_info = geography_dict.get(name)
         if not id_list or not service_info:
             print(None)
+
         payload = {"adds": []}
         for item_id in id_list:
             # Query record from AGOL service
@@ -628,12 +763,15 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
+    # -------------------------------------------------------------------------
     # BOROUGH
+    # -------------------------------------------------------------------------
     if name == 'borough':
         id_list = st.session_state.get(f"{name}_list")
         service_info = geography_dict.get(name)
         if not id_list or not service_info:
             print(None)
+
         payload = {"adds": []}
         for item_id in id_list:
             data = select_record(service_info["url"], service_info["layer"],
@@ -653,12 +791,15 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
+    # -------------------------------------------------------------------------
     # SENATE
+    # -------------------------------------------------------------------------
     if name == 'senate':
         id_list = st.session_state.get(f"{name}_list")
         service_info = geography_dict.get(name)
         if not id_list or not service_info:
             print(None)
+
         payload = {"adds": []}
         for item_id in id_list:
             data = select_record(service_info["url"], service_info["layer"],
@@ -676,12 +817,15 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
+    # -------------------------------------------------------------------------
     # HOUSE
+    # -------------------------------------------------------------------------
     if name == 'house':
         id_list = st.session_state.get(f"{name}_list")
         service_info = geography_dict.get(name)
         if not id_list or not service_info:
             print(None)
+
         payload = {"adds": []}
         for item_id in id_list:
             data = select_record(service_info["url"], service_info["layer"],
@@ -703,17 +847,19 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
-
-    # routes
+    # -------------------------------------------------------------------------
+    # ROUTE (IMPACTED ROUTES)
+    # -------------------------------------------------------------------------
     if name == 'route':
         id_list = st.session_state.get(f"{name}_list")
         service_info = geography_dict.get(name)
         if not id_list or not service_info:
             print(None)
+
         payload = {"adds": []}
         for item_id in id_list:
             data = select_record(service_info["url"], service_info["layer"],
-                                "Route_ID", str(item_id), fields="*", return_geometry=True)
+                                 "Route_ID", str(item_id), fields="*", return_geometry=True)
             if not data:
                 continue
             attrs = data[0].get("attributes", {})
@@ -729,11 +875,8 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
-
-
     # Return cleaned payload
     if payload == {}:
         return None
-    
     else:
         return clean_payload(payload)

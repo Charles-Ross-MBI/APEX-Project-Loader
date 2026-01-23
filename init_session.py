@@ -1,23 +1,97 @@
+
+"""
+===============================================================================
+SESSION INITIALIZATION (STREAMLIT) — DEFAULTS, LISTS, URLS, CREDENTIALS
+===============================================================================
+
+Purpose:
+    Defines and initializes Streamlit session_state keys used across the app.
+    This module centralizes:
+      - Default session values and wizard state
+      - Static lookup dictionaries and value lists (years, phases, etc.)
+      - AGOL/APEX service URLs and layer indices
+      - AGOL credential sourcing (.env or st.secrets)
+      - AWP field mapping dictionary used for AASHTOWare integration
+      - Uploader list values (for attribution / metadata)
+
+Key behaviors:
+    - Idempotent initialization:
+        * Uses `setdefault()` and conditional checks so repeated imports/reruns
+          do not overwrite active user inputs.
+    - Centralized service definitions:
+        * Sets APEX base URL + layer indices and derived per-layer URLs.
+        * Sets intersect-service URLs for geography/district queries.
+    - Credential sourcing:
+        * If a .env file exists, loads via python-dotenv
+        * Otherwise tries Streamlit secrets
+        * Stores into session_state['AGOL_USERNAME'] / ['AGOL_PASSWORD']
+
+Session-state keys created/initialized (high-level):
+    - Wizard/navigation:
+        'step', 'geo_option', 'info_option', selection flags, duplication flags
+    - Geometry selections:
+        'selected_point', 'selected_route', 'selected_boundary'
+    - Project/contact scaffolding:
+        'project_contacts', 'details_complete', etc.
+    - Static lists:
+        'construction_years', 'phase_list', 'funding_list', 'practice_list', 'years'
+    - AGOL/APEX:
+        'apex_url', layer IDs, layer URLs, intersect URLs
+    - AWP:
+        'awp_fields' mapping dictionary
+    - Uploaders:
+        'uploaders' list
+
+Notes:
+    - This module runs init_session_state() automatically at import time.
+      That pattern is intentional for Streamlit apps where scripts rerun often.
+    - Values are seeded, not enforced: downstream pages may update session_state
+      after this initializer runs.
+
+===============================================================================
+"""
+
 import os
 import streamlit as st
 from agol_util import select_record
 
 
+# =============================================================================
+# ENTRYPOINT: SESSION STATE INITIALIZATION
+# =============================================================================
+# init_session_state():
+#   - Creates baseline session_state keys if missing
+#   - Populates lookup dictionaries and static lists
+#   - Populates AGOL/APEX URLs and layer IDs
+#   - Loads credentials from .env or st.secrets and stores them in session_state
+#   - Sets AWP field mapping and uploader list
+# =============================================================================
 def init_session_state():
     """Initialize all session state values."""
 
+    # -------------------------------------------------------------------------
+    # Session scaffolding: widget prefix registry (used by other modules)
+    # -------------------------------------------------------------------------
     if "all_widget_prefixes" not in st.session_state:
         st.session_state["all_widget_prefixes"] = set()
 
-
-    # ---------------------------------------------------------
-    # DEFAULTS
-    # ---------------------------------------------------------
+    # ======================================================
+    # DEFAULT
+    # ======================================================
+    # Core keys used across the wizard. These are seeded once and then updated
+    # by page-level logic as the user progresses.
     defaults = {
+        "prev_aashto_id": None,
+        "prev_awp_name": None,
+        "prev_construction_year": None,
+        "form_new_continuing_state": "New",
+        "show_duplicate_dialog": False,
+        "duplicate_found": False,
+        "continue_w_duplicate": None,
         "step": 1,
         "selected_point": None,
         "selected_route": None,
-        'selected_boundary':None,
+        "selected_boundary": None,
         "project_type": None,
         "geo_option": None,
         "info_option": None,
@@ -26,22 +100,25 @@ def init_session_state():
         "project_description": "",
         "project_category": None,
         "project_contacts": [],
-        'details_complete': False
+        "details_complete": False,
+        "duplicate_confirmed": False,
     }
 
+    # Seed missing keys (do not overwrite user/session modifications)
     for key, val in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = val
-        for key, value in defaults.items():
-            st.session_state.setdefault(key, value)
 
+    # Redundant-but-safe idempotent seeding (kept as-is)
+    for key, value in defaults.items():
+        st.session_state.setdefault(key, value)
 
-
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
     # DICTIONARIES
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # Lookup dictionaries and code->label mappings used across form fields.
     dicts = {
-        'project_phases' : {
+        'project_phases': {
             49: "Project Definition",
             50: "Project Design & Review",
             51: "Assigned to Letting",
@@ -53,23 +130,20 @@ def init_session_state():
             56: "Active Contract"
         }
     }
-
     for key, value in dicts.items():
         st.session_state.setdefault(key, value)
 
-
-
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
     # VALUES
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # Predefined selectbox lists (construction years, funding types, etc.)
     value_lists = {
         'construction_years': [
             "",
-            "CY2025", 
-            "CY2026", 
-            "CY2027", 
-            "CY2028", 
-            "CY2029", 
+            "CY2026",
+            "CY2027",
+            "CY2028",
+            "CY2029",
             "CY2030"
         ],
         'phase_list': [
@@ -86,43 +160,42 @@ def init_session_state():
         ],
         'funding_list': [
             "",
-            "FHWY", 
-            "FHWA", 
-            "FAA", 
-            "STATE", 
+            "FHWY",
+            "FHWA",
+            "FAA",
+            "STATE",
             "OTHER"
         ],
         'practice_list': [
             "",
-            'Highways', 
-            "Aviation", 
-            "Facilities", 
-            "Marine Highway", 
+            'Highways',
+            "Aviation",
+            "Facilities",
+            "Marine Highway",
             "Other"
         ],
         'years': [
             "",
-            "2020", 
-            "2021", 
-            "2022", 
-            "2023", 
-            "2024", 
-            "2025", 
-            "2026", 
-            "2027", 
-            "2028", 
-            "2029", 
+            "2020",
+            "2021",
+            "2022",
+            "2023",
+            "2024",
+            "2025",
+            "2026",
+            "2027",
+            "2028",
+            "2029",
             "2030"
         ]
     }
-
     for key, value in value_lists.items():
         st.session_state.setdefault(key, value)
 
-
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
     # URL PARAMETERS
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
+    # Optional URL-driven state (e.g., deep links or versioning)
     url_params = {
         "guid": None,
         "version": None
@@ -130,29 +203,28 @@ def init_session_state():
     for key, value in url_params.items():
         st.session_state.setdefault(key, value)
 
-
-
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
     # AGOL URLS
-    # ---------------------------------------------------------
-
+    # -------------------------------------------------------------------------
     # Main APEX URL
     apex_url = 'https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_4c8488c7bb7b4f15a381cb3786da94e6/FeatureServer'
 
+    # Layer indices used by loaders and query helpers
     apex_layers = {
-        "projects": 0,
-        "sites": 1,
-        "routes": 2,
-        "boundaries": 3,
-        "impact_comms": 4,
-        "region": 5,
-        "bor": 6,
-        "senate": 7,
-        "house": 8,
-        "impact_routes": 9,
-        "contacts": 10, 
+        "projects_layer": 0,
+        "sites_layer": 1,
+        "routes_layer": 2,
+        "boundaries_layer": 3,
+        "impact_comms_layer": 4,
+        "region_layer": 5,
+        "bor_layer": 6,
+        "senate_layer": 7,
+        "house_layer": 8,
+        "impact_routes_layer": 9,
+        "contacts_layer": 10,
     }
-    
+
+    # Convenience per-layer URLs (FeatureServer/{layer})
     agol_urls = {
         'apex_url': apex_url,
         "projects_url": f"{apex_url}/0",
@@ -169,22 +241,36 @@ def init_session_state():
         "aashtoware_url": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
         "mileposts": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer"
     }
-    
-    for key, value in agol_urls.items():
-        st.session_state.setdefault(key, value)
 
+    # Geography intersect services (used by district_queries / geography payloads)
+    geography_url = {
+        'region_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_DOT_PF_Regions/FeatureServer",
+        'bor_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_BoroughCensus/FeatureServer",
+        'senate_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_SenateDistricts/FeatureServer",
+        'house_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_HouseDistricts/FeatureServer",
+        'route_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer"
+    }
+
+    # Seed layer indices and URLs into session_state
     for key, value in apex_layers.items():
         st.session_state.setdefault(key, value)
+    for key, value in agol_urls.items():
+        st.session_state.setdefault(key, value)
+    for key, value in geography_url.items():
+        st.session_state.setdefault(key, value)
 
-
-
-    # ---------------------------------------------------------
+    # -------------------------------------------------------------------------
     # AGOL CREDENTIALS
-    # ---------------------------------------------------------
-
+    # -------------------------------------------------------------------------
+    # Credential sourcing precedence:
+    #   1) .env file (python-dotenv)
+    #   2) Streamlit secrets
+    # The resolved credentials are then stored into session_state.
+    #
+    # NOTE: Variables env_user/env_pass are present but unused; preserved as-is.
+    # -------------------------------------------------------------------------
     # 1. Check if a .env file exists
     env_file_exists = os.path.exists(".env")
-
     env_user = None
     env_pass = None
 
@@ -193,19 +279,84 @@ def init_session_state():
         load_dotenv()
         agol_username = os.getenv("AGOL_USERNAME")
         agol_password = os.getenv("AGOL_PASSWORD")
-
     else:
         # 2. Check secrets (may or may not exist)
         agol_username = st.secrets.get("AGOL_USERNAME") if hasattr(st, "secrets") else None
         agol_password = st.secrets.get("AGOL_PASSWORD") if hasattr(st, "secrets") else None
 
-
     # 4. Store in session_state safely
     st.session_state.setdefault("AGOL_USERNAME", agol_username)
     st.session_state.setdefault("AGOL_PASSWORD", agol_password)
 
+    # ======================================================
+    # NEW: Central dictionary for AWP mappings
+    # ======================================================
+    # AWP_FIELDS provides a single place to map UI/session keys to the
+    # AASHTOWare-provided session keys.
+    AWP_FIELDS = {
+        "awp_proj_name": "awp_proj_name",
+        "proj_name": "awp_public_proj_name",
+        "phase": "awp_project_workflowphaseid",
+        "fed_proj_num": "awp_fed_proj_num",
+        "iris": "awp_iris_number",
+        "stip": "awp_stip",
+        "fund_type": "awp_funding_type",
+        "proj_prac": "awp_project_practice",
+        "contractor": "awp_contractor",
+        "anticipated_start": "awp_anticipated_construction_begin",
+        "anticipated_end": "awp_anticipated_construction_end",
+        "award_date": "awp_award_date",
+        "award_fiscalyear": "awp_awardfederalfiscalyear",
+        "awarded_amount": "awp_proposal_awardedamount",
+        "current_contract_amount": "awp_contract_currentcontractamount",
+        "amount_paid_to_date": "awp_contract_amountpaidtodate",
+        "tenadd": "awp_tentative_advertising_date",
+        "awp_proj_desc": "awp_project_description",
+        "proj_desc": "awp_public_desc",
+        "proj_web": "awp_proj_web",
+        "apex_mapper_link": "awp_apex_mapper_link",
+        "email_signup": "awp_email_signup",
+    }
+    st.session_state['awp_fields'] = AWP_FIELDS
 
-# --------------------------------------------------------- 
-# RUN AUTOMATICALLY WHEN IMPORTED 
-# --------------------------------------------------------- 
+    # ======================================================
+    # DATA UPLOADERS
+    # ======================================================
+    # Values for attribution / uploader selection UI.
+    uploaders = ["",
+        "Christopher Butrico",
+        "Riley Conley",
+        "Casey DunnGossin",
+        "Caitlin Frye",
+        "Jennifer Gross",
+        "Alexander Hutcherson",
+        "Karin McGillivray",
+        "Charles Ross",
+        "Andrew Tuell",
+        "Callan VanNuys",
+        "Malia Walters",
+        "Sara Wazir",
+        "Gretchen WeissBrooks",
+        "Hannah White",
+        "Lauren Winkler",
+        "Other"]
+    st.session_state['uploaders'] =uploaders
+
+
+    # ======================================================
+    # AWP Crosswalk (COMPLETE AFTER OFFICIAL UPLOAD)
+    # ======================================================
+    awp_crosswalk = {
+
+    }
+
+    st.session_state['awp_crosswalk'] = AWP_FIELDS
+
+    
+# -----------------------------------------------------------------------------
+# RUN AUTOMATICALLY WHEN IMPORTED
+# -----------------------------------------------------------------------------
+# Streamlit reruns scripts frequently; importing this module should ensure
+# session_state is always seeded with required defaults.
+# -----------------------------------------------------------------------------
 init_session_state()
