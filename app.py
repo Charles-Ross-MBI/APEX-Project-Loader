@@ -55,7 +55,7 @@ from load_geometry import load_geometry_app
 # Streamlit page configuration:
 #   - Title, icon, and layout are set once at app start
 # -----------------------------------------------------------------------------
-st.set_page_config(page_title="Alaska DOT&amp;amp;PF - APEX Project Loader", page_icon="📝", layout="centered")
+st.set_page_config(page_title="Alaska DOT&PF - APEX Project Loader", page_icon="📝", layout="centered")
 
 # -----------------------------------------------------------------------------
 # Base overview map:
