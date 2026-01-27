@@ -76,6 +76,58 @@ def add_small_geocoder(fmap, position: str = "topright", width_px: int = 120, fo
     """))
 
 
+
+
+def geometry_to_folium(geom, **style):
+    """
+    Convert ArcGIS-style geometry (single or list) into Folium layers.
+    Supports:
+      - Point:      {"x": lon, "y": lat}
+      - Multipoint: {"points": [[lon,lat], ...]}
+      - Polyline:   {"paths": [[[lon,lat], ...]]}
+      - Polygon:    {"rings": [[[lon,lat], ...]]}
+      - List of any of the above
+    """
+
+    # If it's a list of geometries → wrap into FeatureGroup
+    if isinstance(geom, list):
+        group = folium.FeatureGroup()
+        for g in geom:
+            layer = geometry_to_folium(g, **style)
+            layer.add_to(group)
+        return group
+
+    # POINT
+    if "x" in geom and "y" in geom:
+        return folium.Marker([geom["y"], geom["x"]])
+
+    # MULTIPOINT
+    if "points" in geom:
+        fg = folium.FeatureGroup()
+        for x, y in geom["points"]:
+            fg.add_child(folium.Marker([y, x]))
+        return fg
+
+    # POLYLINE
+    if "paths" in geom:
+        latlon = []
+        for path in geom["paths"]:
+            latlon.extend([[y, x] for x, y in path])
+        return folium.PolyLine(latlon, **style)
+
+    # POLYGON
+    if "rings" in geom:
+        latlon = []
+        for ring in geom["rings"]:
+            latlon.extend([[y, x] for x, y in ring])
+        return folium.Polygon(latlon, **style)
+
+    raise ValueError("Unsupported geometry type")
+
+
+
+
+
 def add_bottom_message(m, message: str):
     """
     Add a persistent bottom message bar to a Folium map.

@@ -928,7 +928,7 @@ def _render_original_form(is_awp: bool):
             with col12:
                 ro_widget(
                     key="award_date",
-                    label="Anticipated End Year",
+                    label="Award Date",
                     value=fmt_date(val("awp_award_date")),
                 )
             with col13:
