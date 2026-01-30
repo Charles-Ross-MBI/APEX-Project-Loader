@@ -80,7 +80,7 @@ from map_util import (
 )
 
 # Data helpers (milepost entry)
-from agol_util import get_unique_field_values
+from agol_util import get_unique_field_values, get_route_segment
 
 
 # =============================================================================
@@ -174,7 +174,7 @@ def draw_point():
     with button_container:
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("LOAD", use_container_width=True):
+            if st.button("LOAD", use_container_width=True, type = 'primary'):
                 if latest_points:
                     st.session_state["selected_point"] = latest_points
         with col2:
@@ -293,7 +293,7 @@ def draw_line():
     with button_container:
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("LOAD", use_container_width=True):
+            if st.button("LOAD", use_container_width=True, type = 'primary'):
                 if latest_routes:
                     st.session_state["selected_route"] = latest_routes
         with col2:
@@ -406,7 +406,7 @@ def draw_boundary():
     with button_container:
         col1, col2 = st.columns([1, 1])
         with col1:
-            if st.button("LOAD", use_container_width=True):
+            if st.button("LOAD", use_container_width=True, type = 'primary'):
                 if latest_boundaries:
                     st.session_state["selected_boundary"] = latest_boundaries
         with col2:
@@ -572,7 +572,7 @@ def enter_latlng():
     with bottom:
         c1, c2 = st.columns([1, 1])
         with c1:
-            if st.button("LOAD", use_container_width=True):
+            if st.button("LOAD", use_container_width=True, type = 'primary'):
                 if st.session_state.manual_points_buffer:
                     st.session_state["selected_point"] = list(st.session_state.manual_points_buffer)
                 else:
@@ -592,57 +592,258 @@ def enter_latlng():
     )
 
 
+import folium
+import streamlit as st
+from streamlit_folium import st_folium
+
+
 def enter_mileposts():
     """
-    Milepost entry tool (route + start/end milepost).
-
-    Notes:
-        This function currently displays UI controls for selecting a route and
-        mileposts from an AGOL source and includes a placeholder for future map
-        rendering of the resulting LRS line.
-
-    Session-state dependencies:
-        - st.session_state['mileposts'] should reference the milepost service.
+    Select a route and choose starting and ending mileposts to generate a route
+    segment. A preview map is displayed automatically. Press LOAD to save the
+    generated geometry or CLEAR to reset the tool (route + all selections).
     """
+
     st.write("")
-
-    # Milepost AGOL Layer
-    mileposts = st.session_state['mileposts']
-
-    # Grab List of Route Names
-    route_names = get_unique_field_values(
-        url=mileposts,
-        layer=1,
-        field="Route_Name_Unique",
-        sort_type='alpha',
-        sort_order='asc'
+    st.markdown(
+        "###### Generate Route Segment by Route Name & Mileposts",
+        unsafe_allow_html=True,
     )
 
-    # Create dropdown list for route selection (no default selected)
-    route_name = st.selectbox("Route Name", route_names, index=None, placeholder="Select a route")
+    st.write(
+        "Select a route, then choose a starting and ending milepost. "
+        "A preview of the route segment will appear on the map. "
+        "Press **LOAD** to save the geometry or **CLEAR** to reset."
+    )
+
+    # ---------------------------------------------------------
+    # Session state initialization
+    # ---------------------------------------------------------
+    st.session_state.setdefault("milepost_geometry_buffer", [])
+    st.session_state.setdefault("milepost_map_reset", 0)
+
+    # A token to force widget keys to change on CLEAR (hard reset)
+    st.session_state.setdefault("milepost_widget_reset", 0)
+
+    # Explicit state holders for current selections (optional but useful)
+    st.session_state.setdefault("mp_route_name", None)
+    st.session_state.setdefault("mp_from_mp", None)
+    st.session_state.setdefault("mp_to_mp", None)
+
+    # Milepost AGOL Layer
+    mileposts = st.session_state["mileposts"]
+
+    # ---------------------------------------------------------
+    # CLEAR button at top (optional UX improvement)
+    # ---------------------------------------------------------
+    # You can remove this block if you only want CLEAR at bottom.
+    # if st.button("CLEAR", key=f"clear_top_{st.session_state.milepost_widget_reset}"):
+    #     _clear_milepost_tool_state()
+    #     st.rerun()
+
+    # ---------------------------------------------------------
+    # Grab List of Route Names
+    # ---------------------------------------------------------
+    route_names = get_unique_field_values(
+        url=mileposts,
+        layer=0,
+        field="ROUTE_NAME",
+        sort_type="alpha",
+        sort_order="asc",
+    )
+
+    # ---------------------------------------------------------
+    # Route dropdown (keyed)
+    # ---------------------------------------------------------
+    reset_token = st.session_state.milepost_widget_reset
+
+    def _on_route_change():
+        """
+        When route changes, reset MPs and preview so stale selections don't persist.
+        """
+        st.session_state.mp_from_mp = None
+        st.session_state.mp_to_mp = None
+        st.session_state.milepost_geometry_buffer = []
+        st.session_state.milepost_map_reset += 1
+
+    route_name = st.selectbox(
+        "Route Name",
+        route_names,
+        index=None,
+        placeholder="Select a route",
+        key=f"route_name_{reset_token}",
+        on_change=_on_route_change,
+    )
+
+    # Sync selection into our own state (so we can clear reliably)
+    st.session_state.mp_route_name = route_name
+
     if route_name is None:
         st.info("Please select a route before milepost options are available.")
-    else:
-        # Get milepost values for the selected route
-        milepost_values = get_unique_field_values(
-            url=mileposts,
-            layer=1,
-            field="Milepost_Number",
-            where=f"Route_Name_Unique='{route_name}'",
-            sort_type='numeric',
-            sort_order='asc'
+
+        # Draw an empty map (optional)
+        m = folium.Map(location=[64.0, -152.0], zoom_start=4)
+        add_small_geocoder(m)
+        st_folium(
+            m,
+            width=700,
+            height=500,
+            key=f"milepost_map_{st.session_state.milepost_map_reset}",
+        )
+        return
+
+    # ---------------------------------------------------------
+    # Milepost values based on route
+    # ---------------------------------------------------------
+    # Escape single quotes if route names can contain them
+    safe_route = route_name.replace("'", "''")
+
+    from_milepost_values = get_unique_field_values(
+        url=mileposts,
+        layer=0,
+        field="FROM_MPT",
+        where=f"ROUTE_NAME='{safe_route}'",
+        sort_type="numeric",
+        sort_order="asc",
+    )
+
+    to_milepost_values = get_unique_field_values(
+        url=mileposts,
+        layer=0,
+        field="TO_MPT",
+        where=f"ROUTE_NAME='{safe_route}'",
+        sort_type="numeric",
+        sort_order="asc",
+    )
+
+    # ---------------------------------------------------------
+    # Milepost dropdowns (keyed)
+    # ---------------------------------------------------------
+    col1, col2 = st.columns(2)
+
+    with col1:
+        from_mp = st.selectbox(
+            "From Milepost",
+            from_milepost_values,
+            index=None,
+            placeholder="Select Start MP",
+            key=f"from_mp_{reset_token}",
         )
 
-        # Dropdowns for start and end mileposts (no default selected)
-        col1, col2 = st.columns(2)
-        with col1:
-            start = st.selectbox("Start Milepost", milepost_values, index=None, placeholder="Select Start MP")
-        with col2:
-            end = st.selectbox("End Milepost", milepost_values, index=None, placeholder="Select End MP")
+    # Filter TO_MPT so it must be > FROM_MPT
+    if from_mp is not None:
+        to_milepost_values = [mp for mp in to_milepost_values if mp > from_mp]
 
-        if start is not None and end is not None:
-            st.write('')
-            st.write(f"MAP WITH LRS LINEAR ROUTE WILL APPEAR BELOW")
+    with col2:
+        to_mp = st.selectbox(
+            "To Milepost",
+            to_milepost_values,
+            index=None,
+            placeholder="Select End MP",
+            key=f"to_mp_{reset_token}",
+        )
+
+    # Sync to state (so CLEAR can wipe these too)
+    st.session_state.mp_from_mp = from_mp
+    st.session_state.mp_to_mp = to_mp
+
+    # Stop until both are selected
+    if from_mp is None or to_mp is None:
+        # Show map without route preview
+        m = folium.Map(location=[64.0, -152.0], zoom_start=4)
+        add_small_geocoder(m)
+        st_folium(
+            m,
+            width=700,
+            height=500,
+            key=f"milepost_map_{st.session_state.milepost_map_reset}",
+        )
+        return
+
+    st.write("")
+
+    # ---------------------------------------------------------
+    # Get geometry path from AGOL
+    # ---------------------------------------------------------
+    geometry_path = get_route_segment(route_name, from_mp, to_mp)
+
+    # Store preview in buffer
+    st.session_state.milepost_geometry_buffer = geometry_path
+
+    # ---------------------------------------------------------
+    # Build Folium map
+    # ---------------------------------------------------------
+    m = folium.Map(location=[64.0, -152.0], zoom_start=4)
+    fg = folium.FeatureGroup(name="Milepost Geometry").add_to(m)
+
+    if geometry_path:
+        # Draw the boundary
+        folium.PolyLine(
+            geometry_path,
+            color="#3388ff",
+            weight=8,
+            opacity=1
+        ).add_to(fg)
+
+        # Fit map to geometry
+        lats = [p[0] for p in geometry_path]
+        lons = [p[1] for p in geometry_path]
+        m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
+
+    add_small_geocoder(m)
+
+    st_folium(
+        m,
+        width=700,
+        height=500,
+        key=f"milepost_map_{st.session_state.milepost_map_reset}",
+    )
+
+    # ---------------------------------------------------------
+    # LOAD + CLEAR buttons
+    # ---------------------------------------------------------
+    def _clear_milepost_tool_state():
+        """
+        Clear route preview + saved geometry + all widget selections.
+        """
+        st.session_state.milepost_geometry_buffer = []
+        st.session_state["selected_route"] = []
+
+        # Reset our explicit selection state
+        st.session_state.mp_route_name = None
+        st.session_state.mp_from_mp = None
+        st.session_state.mp_to_mp = None
+
+        # Force widgets to reset by changing their keys
+        st.session_state.milepost_widget_reset += 1
+
+        # Force folium map reset
+        st.session_state.milepost_map_reset += 1
+
+    bottom = st.container()
+    with bottom:
+        c1, c2 = st.columns([1, 1])
+
+        # LOAD
+        with c1:
+            if st.button("LOAD", use_container_width=True, type="primary"):
+                if st.session_state.milepost_geometry_buffer:
+                    st.session_state["selected_route"] = [
+                        list(st.session_state.milepost_geometry_buffer)
+                    ]
+                else:
+                    st.info("No geometry to load.")
+
+        # CLEAR
+        with c2:
+            if st.button("CLEAR", use_container_width=True):
+                _clear_milepost_tool_state()
+                st.rerun()
+
+    st.markdown("", unsafe_allow_html=True)
+
+
+
 
 
 # =============================================================================

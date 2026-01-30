@@ -103,7 +103,7 @@ def contacts_list():
     # -------------------------------------------------------------------------
     # Add contact action + validation
     # -------------------------------------------------------------------------
-    if st.button("Add Contact"):
+    if st.button("ADD CONTACT", use_container_width=True):
         # Require all fields before validating formats.
         if name and email and phone:
             if not is_valid_email(email):

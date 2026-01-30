@@ -126,6 +126,46 @@ def geometry_to_folium(geom, **style):
 
 
 
+def extract_coordinates(geom):
+    """
+    Extract a flat list of [lat, lon] pairs from:
+      - A single ArcGIS geometry
+      - A list of ArcGIS geometries
+    """
+
+    coords = []
+
+    # If list → process each geometry
+    if isinstance(geom, list):
+        for g in geom:
+            coords.extend(extract_coordinates(g))
+        return coords
+
+    # POINT
+    if "x" in geom and "y" in geom:
+        return [[geom["y"], geom["x"]]]
+
+    # MULTIPOINT
+    if "points" in geom:
+        return [[y, x] for x, y in geom["points"]]
+
+    # POLYLINE
+    if "paths" in geom:
+        for path in geom["paths"]:
+            for x, y in path:
+                coords.append([y, x])
+        return coords
+
+    # POLYGON
+    if "rings" in geom:
+        for ring in geom["rings"]:
+            for x, y in ring:
+                coords.append([y, x])
+        return coords
+
+    raise ValueError("Unsupported geometry format")
+
+
 
 
 def add_bottom_message(m, message: str):

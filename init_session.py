@@ -239,7 +239,7 @@ def init_session_state():
         "impact_routes_url": f"{apex_url}/9",
         "contacts_url": f"{apex_url}/10",
         "aashtoware_url": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
-        "mileposts": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer"
+        "mileposts": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer"
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
@@ -248,7 +248,7 @@ def init_session_state():
         'bor_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_BoroughCensus/FeatureServer",
         'senate_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_SenateDistricts/FeatureServer",
         'house_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_HouseDistricts/FeatureServer",
-        'route_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer"
+        'route_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Roads_AKDOT/FeatureServer"
     }
 
     # Seed layer indices and URLs into session_state

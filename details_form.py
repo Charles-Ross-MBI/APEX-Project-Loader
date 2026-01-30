@@ -731,7 +731,7 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="proj_name",
                     label="Public Project Name",
-                    value=fmt_string(val("awp_public_name")),
+                    value=fmt_string(val("awp_name")),
                 )
         else:
             # UI mode: editable public project name
@@ -885,13 +885,13 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="anticipated_start",
                     label="Anticipated Begin Year",
-                    value=fmt_int(val("awp_anticipated_construction_begin")),
+                    value=fmt_int(val("awp_anticipated_construction_begin"), year = True),
                 )
             with col11:
                 ro_widget(
                     key="anticipated_end",
                     label="Anticipated End Year",
-                    value=fmt_int(val("awp_anticipated_construction_end")),
+                    value=fmt_int(val("awp_anticipated_construction_end"), year = True),
                 )
         else:
             col10, col11 = st.columns(2)
@@ -1120,7 +1120,7 @@ def _render_original_form(is_awp: bool):
         # ---------------------------------------------------------------------
         # SUBMIT + VALIDATION + SNAPSHOT
         # ---------------------------------------------------------------------
-        submit_button = st.form_submit_button("Submit Information")
+        submit_button = st.form_submit_button("SUBMIT INFORMATION", use_container_width=True)
 
         if submit_button:
 

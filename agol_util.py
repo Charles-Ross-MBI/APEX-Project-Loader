@@ -44,8 +44,11 @@ Notes:
 
 import json
 import requests
+import math
 import streamlit as st
 import logging
+from shapely.geometry import LineString
+from shapely.ops import unary_union, linemerge
 
 
 # =============================================================================
@@ -203,6 +206,290 @@ def query_record(url: str, layer: int, where: str, fields="*", return_geometry=F
         )
 
     return data.get("features", [])
+
+
+
+
+
+import math
+import requests
+import streamlit as st
+from shapely.geometry import LineString
+from shapely.ops import unary_union, linemerge
+
+
+def get_route_segment(
+    route_name: str,
+    from_mp: float,
+    to_mp: float,
+    *,
+    simplify: bool = True,
+    # Adaptive tolerance policy (in meters, converted to degrees internally)
+    tolerance_frac: float = 0.001,   # 0.1% of route length
+    min_tolerance_m: float = 5.0,    # clamp low end
+    max_tolerance_m: float = 25.0,   # clamp high end
+    preserve_topology: bool = True,
+    # Guardrails: prevent oversimplification
+    max_point_reduction: float = 0.90,  # don't remove >90% of vertices
+    min_points: int = 50               # but also don't reduce below this
+):
+    """
+    Queries the Pavement Condition Tenth Mile dataset for a route + milepost range,
+    merges all geometry paths into a single unified line, optionally simplifies it
+    while staying strictly in EPSG:4326, and returns a folium-ready list of
+    [lat, lon] coordinates.
+    """
+
+    # ---------------------------------------------------------
+    # Helper functions (all 4326, no reprojection)
+    # ---------------------------------------------------------
+    def _normalize_to_single_line(g):
+        """
+        Returns a single LineString:
+        - If LineString: return as-is
+        - If MultiLineString: return the longest
+        - If GeometryCollection: collect lines and return the longest after merge
+        """
+        if g is None or g.is_empty:
+            return None
+
+        if g.geom_type == "LineString":
+            return g
+
+        if g.geom_type == "MultiLineString":
+            parts = list(g.geoms)
+            return max(parts, key=lambda x: x.length) if parts else None
+
+        # GeometryCollection or others
+        if hasattr(g, "geoms"):
+            line_parts = []
+            for sub in g.geoms:
+                if sub.geom_type == "LineString":
+                    line_parts.append(sub)
+                elif sub.geom_type == "MultiLineString":
+                    line_parts.extend(list(sub.geoms))
+
+            if not line_parts:
+                return None
+
+            merged_lines = linemerge(unary_union(line_parts))
+            if merged_lines.geom_type == "LineString":
+                return merged_lines
+            if merged_lines.geom_type == "MultiLineString":
+                parts = list(merged_lines.geoms)
+                return max(parts, key=lambda x: x.length) if parts else None
+
+        return None
+
+    def _mean_lat(line):
+        coords = list(line.coords)
+        if not coords:
+            return 0.0
+        return sum(lat for lon, lat in coords) / len(coords)
+
+    def _meters_per_degree(lat_deg):
+        """
+        Approx meters per degree at given latitude.
+        (Good enough for tolerance sizing; keeps CRS in 4326.)
+        """
+        lat_rad = math.radians(lat_deg)
+        m_per_deg_lat = 111_320.0
+        m_per_deg_lon = 111_320.0 * math.cos(lat_rad)
+        # Avoid zero near poles
+        m_per_deg_lon = max(m_per_deg_lon, 1e-6)
+        return m_per_deg_lat, m_per_deg_lon
+
+    def _approx_length_m(line):
+        """
+        Approximate geodesic length in meters using a local equirectangular approximation.
+        Uses per-segment scaling based on mean latitude.
+        """
+        coords = list(line.coords)
+        if len(coords) < 2:
+            return 0.0
+
+        lat0 = _mean_lat(line)
+        m_per_deg_lat, m_per_deg_lon = _meters_per_degree(lat0)
+
+        total = 0.0
+        (x0, y0) = coords[0]
+        for (x1, y1) in coords[1:]:
+            dx_m = (x1 - x0) * m_per_deg_lon
+            dy_m = (y1 - y0) * m_per_deg_lat
+            total += math.hypot(dx_m, dy_m)
+            x0, y0 = x1, y1
+        return total
+
+    def _adaptive_tolerance_deg(line):
+        """
+        Determine tolerance in degrees by:
+        1) approximate length in meters
+        2) tolerance_m = clamp(length_m * tolerance_frac, min_tolerance_m, max_tolerance_m)
+        3) convert meters to degrees using local meters/degree
+        """
+        length_m = _approx_length_m(line)
+        tol_m = length_m * float(tolerance_frac)
+
+        tol_m = max(float(min_tolerance_m), min(float(max_tolerance_m), tol_m))
+
+        lat0 = _mean_lat(line)
+        m_per_deg_lat, m_per_deg_lon = _meters_per_degree(lat0)
+
+        # Convert meters -> degrees (use the "stricter" conversion so we don't oversimplify)
+        tol_deg_lat = tol_m / m_per_deg_lat
+        tol_deg_lon = tol_m / m_per_deg_lon
+
+        # Use the smaller degree tolerance to be conservative
+        return min(tol_deg_lat, tol_deg_lon), tol_m, length_m
+
+    def _simplify_with_guardrails(line):
+        """
+        Simplify with adaptive tolerance but ensure we don't nuke the shape:
+        - preserve topology
+        - limit vertex reduction
+        - keep at least min_points (when possible)
+        """
+        if line is None or line.is_empty:
+            return line
+
+        orig_coords = list(line.coords)
+        if len(orig_coords) < 3:
+            return line
+
+        tol_deg, tol_m, length_m = _adaptive_tolerance_deg(line)
+
+        simplified = line.simplify(tol_deg, preserve_topology=preserve_topology)
+
+        # If simplification yields something unusable, revert
+        if simplified.is_empty or simplified.geom_type != "LineString":
+            return line
+
+        simp_coords = list(simplified.coords)
+        if len(simp_coords) < 2:
+            return line
+
+        # Guardrail 1: don't reduce below min_points unless original is already small
+        if len(orig_coords) >= min_points and len(simp_coords) < min_points:
+            # Ease off: reduce tolerance until we hit min_points or give up
+            # Do a small backoff loop without being too expensive
+            backoff = 0.5
+            for _ in range(6):
+                tol_deg *= backoff
+                simplified2 = line.simplify(tol_deg, preserve_topology=preserve_topology)
+                if simplified2.geom_type == "LineString":
+                    simp2_coords = list(simplified2.coords)
+                    if len(simp2_coords) >= min_points:
+                        return simplified2
+            return line
+
+        # Guardrail 2: don't remove "too many" vertices
+        removed_frac = 1.0 - (len(simp_coords) / max(1, len(orig_coords)))
+        if removed_frac > max_point_reduction:
+            # Ease off tolerance similarly
+            backoff = 0.5
+            for _ in range(6):
+                tol_deg *= backoff
+                simplified2 = line.simplify(tol_deg, preserve_topology=preserve_topology)
+                if simplified2.geom_type == "LineString":
+                    simp2_coords = list(simplified2.coords)
+                    removed_frac2 = 1.0 - (len(simp2_coords) / max(1, len(orig_coords)))
+                    if removed_frac2 <= max_point_reduction:
+                        return simplified2
+            return line
+
+        return simplified
+
+    # ---------------------------------------------------------
+    # Authentication
+    # ---------------------------------------------------------
+    token = get_agol_token()
+    if not token:
+        raise ValueError("Authentication failed: Invalid token.")
+
+    # ---------------------------------------------------------
+    # Build query URL
+    # ---------------------------------------------------------
+    url = st.session_state["mileposts"] + "/0/query"
+
+    where = (
+        f"ROUTE_NAME = '{route_name}' "
+        f"AND FROM_MPT >= {from_mp} "
+        f"AND TO_MPT <= {to_mp}"
+    )
+
+    params = {
+        "where": where,
+        "outFields": "*",
+        "returnGeometry": "true",
+        "outSR": 4326,
+        "f": "json",
+        "token": token
+    }
+
+    # ---------------------------------------------------------
+    # Execute query
+    # ---------------------------------------------------------
+    response = requests.get(url, params=params)
+    data = response.json()
+
+    if "error" in data:
+        raise Exception(
+            f"API Error: {data['error']['message']} - {data['error'].get('details', [])}"
+        )
+
+    features = data.get("features", [])
+    if not features:
+        return []
+
+    # ---------------------------------------------------------
+    # Convert all geometry paths into Shapely LineStrings (still 4326)
+    # ---------------------------------------------------------
+    lines = []
+    for f in features:
+        geom = f.get("geometry", {}) or {}
+        for path in geom.get("paths", []) or []:
+            if len(path) >= 2:
+                # ArcGIS path coords are [x, y] == [lon, lat]
+                line = LineString([(lon, lat) for lon, lat in path])
+                if not line.is_empty and line.length > 0:
+                    lines.append(line)
+
+    if not lines:
+        return []
+
+    # ---------------------------------------------------------
+    # Merge overlapping / reversed / crossing segments
+    # ---------------------------------------------------------
+    merged = linemerge(unary_union(lines))
+
+    # ---------------------------------------------------------
+    # Normalize to a single representative LineString
+    # ---------------------------------------------------------
+    route_line = _normalize_to_single_line(merged)
+    if route_line is None or route_line.is_empty:
+        return []
+
+    # ---------------------------------------------------------
+    # Simplify (adaptive tolerance) while staying in EPSG:4326
+    # ---------------------------------------------------------
+    if simplify:
+        route_line = _simplify_with_guardrails(route_line)
+
+    # ---------------------------------------------------------
+    # Convert to Folium format [lat, lon]
+    # ---------------------------------------------------------
+    coords = list(route_line.coords)
+    if not coords:
+        return []
+
+    unified_path = [[lat, lon] for lon, lat in coords]
+    return unified_path
+
+
+
+
+
+
 
 
 # =============================================================================
