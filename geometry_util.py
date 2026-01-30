@@ -9,7 +9,7 @@ Purpose:
     geometry in multiple ways:
 
       1) Draw geometries on a map (points, routes, boundaries)
-      2) Enter values (lat/lon point entry; milepost entry placeholder)
+      2) Enter values (lat/lon point entry; milepoint entry placeholder)
       3) Upload zipped shapefiles (points, polylines, polygons)
       4) Review AASHTOWare-provided coordinates (point)
 
@@ -36,8 +36,8 @@ Session-state dependencies (expected at runtime):
         * 'map_reset_counter', 'route_reset_counter' (used to force rerender)
         * 'manual_points_buffer' (manual entry staging)
 
-    - Milepost entry:
-        * 'mileposts' (FeatureServer URL or service reference)
+    - Milepoint entry:
+        * 'milepoint' (FeatureServer URL or service reference)
 
     - Shapefile uploads:
         * 'point_shapefile_uploaded', 'route_shapefile_uploaded',
@@ -79,7 +79,7 @@ from map_util import (
     add_bottom_message,
 )
 
-# Data helpers (milepost entry)
+# Data helpers (milepoint entry)
 from agol_util import get_unique_field_values, get_route_segment
 
 
@@ -424,11 +424,11 @@ def draw_boundary():
 
 
 # =============================================================================
-# SECTION 2: MANUAL ENTRY UPLOAD TOOLS (LAT/LON, MILEPOSTS)
+# SECTION 2: MANUAL ENTRY UPLOAD TOOLS (LAT/LON, MILEPOINTS)
 # =============================================================================
 # These functions provide form-based alternatives to map drawing.
-# NOTE: enter_mileposts() is currently a placeholder and depends on the presence
-# of a mileposts layer reference in session_state.
+# NOTE: enter_milepoints() is currently a placeholder and depends on the presence
+# of a milepoints layer reference in session_state.
 # =============================================================================
 
 def enter_latlng():
@@ -597,12 +597,12 @@ def enter_latlng():
 
 def enter_milepoints():
     """
-    Select a route and choose starting and ending mileposts to generate a route
+    Select a route and choose starting and ending milepoints to generate a route
     segment.
 
     Behaviors:
       - No map is rendered until Route Name, From MP, and To MP are selected.
-      - 'To Milepost' does not appear until 'From Milepost' is selected.
+      - 'To Milepoint' does not appear until 'From Milepoint' is selected.
       - Any change to Route Name / From MP / To MP invalidates downstream content by:
             st.session_state['selected_route'] = None
         (does NOT full-reset widgets like CLEAR does).
@@ -610,12 +610,12 @@ def enter_milepoints():
 
     st.write("")
     st.markdown(
-        "###### Generate Route Segment by Route Name & Mileposts",
+        "###### Generate Route Segment by Route Name & Milepoints",
         unsafe_allow_html=True,
     )
 
     st.write(
-        "Select a route, then choose a starting and ending milepost. "
+        "Select a route, then choose a starting and ending milepoint. "
         "Once all fields are selected, a preview of the route segment will appear. "
         "Press **LOAD** to save the geometry or **CLEAR** to reset."
     )
@@ -807,25 +807,25 @@ def enter_milepoints():
         m,
         width=700,
         height=500,
-        key=f"milepoint_map_{st.session_state.milepoint_map_reset}",
+        key=f"milepoints_map_{st.session_state.milepoints_map_reset}",
     )
 
     # ---------------------------------------------------------
     # LOAD + CLEAR buttons
     # ---------------------------------------------------------
-    def _clear_milepoint_tool_state():
+    def _clear_milepoints_tool_state():
         """
         Full clear: preview + saved geometry + all widget selections.
         """
-        st.session_state.milepoint_geometry_buffer = []
+        st.session_state.milepoints_geometry_buffer = []
         st.session_state["selected_route"] = None
 
         st.session_state.mp_route_name = None
         st.session_state.mp_from_mp = None
         st.session_state.mp_to_mp = None
 
-        st.session_state.milepoint_widget_reset += 1
-        st.session_state.milepoint_map_reset += 1
+        st.session_state.milepoints_widget_reset += 1
+        st.session_state.milepoints_map_reset += 1
 
     bottom = st.container()
     with bottom:
@@ -834,9 +834,9 @@ def enter_milepoints():
         # LOAD
         with c1:
             if st.button("LOAD", use_container_width=True, type="primary"):
-                if st.session_state.milepoint_geometry_buffer:
+                if st.session_state.milepoints_geometry_buffer:
                     st.session_state["selected_route"] = [
-                        list(st.session_state.milepoint_geometry_buffer)
+                        list(st.session_state.milepoints_geometry_buffer)
                     ]
                 else:
                     st.info("No geometry to load.")
@@ -844,7 +844,7 @@ def enter_milepoints():
         # CLEAR
         with c2:
             if st.button("CLEAR", use_container_width=True):
-                _clear_milepoint_tool_state()
+                _clear_milepoints_tool_state()
                 st.rerun()
 
     st.markdown("", unsafe_allow_html=True)
