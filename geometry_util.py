@@ -727,8 +727,11 @@ def enter_mileposts():
                 key=f"to_mp_{reset_token}",
             )
 
-    st.session_state.mp_from_mp = from_mp
-    st.session_state.mp_to_mp = to_mp
+    if from_mp:
+        st.session_state.mp_from_mp = from_mp
+    
+    if to_mp:
+        st.session_state.mp_to_mp = to_mp
 
     # ---------------------------------------------------------
     # NEW: Gate map rendering until ALL fields are completed
