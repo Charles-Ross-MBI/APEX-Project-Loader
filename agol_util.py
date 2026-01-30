@@ -234,7 +234,7 @@ def get_route_segment(
     min_points: int = 50               # but also don't reduce below this
 ):
     """
-    Queries the Pavement Condition Tenth Mile dataset for a route + milepost range,
+    Queries the Pavement Condition Tenth Mile dataset for a route + milepoint range,
     merges all geometry paths into a single unified line, optionally simplifies it
     while staying strictly in EPSG:4326, and returns a folium-ready list of
     [lat, lon] coordinates.
@@ -409,7 +409,7 @@ def get_route_segment(
     # ---------------------------------------------------------
     # Build query URL
     # ---------------------------------------------------------
-    url = st.session_state["mileposts"] + "/0/query"
+    url = st.session_state["milepoints"] + "/0/query"
 
     where = (
         f"ROUTE_NAME = '{route_name}' "
