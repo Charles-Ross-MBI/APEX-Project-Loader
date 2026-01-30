@@ -689,15 +689,15 @@ def enter_mileposts():
         sort_order="asc",
     )
 
-    if from_milepost_values:
-        to_milepost_values = get_unique_field_values(
-            url=mileposts,
-            layer=0,
-            field="TO_MPT",
-            where=f"ROUTE_NAME='{safe_route}'",
-            sort_type="numeric",
-            sort_order="asc",
-        )
+    
+    to_milepost_values = get_unique_field_values(
+        url=mileposts,
+        layer=0,
+        field="TO_MPT",
+        where=f"ROUTE_NAME='{safe_route}'",
+        sort_type="numeric",
+        sort_order="asc",
+    )
 
     # ---------------------------------------------------------
     # Milepost dropdowns
@@ -718,13 +718,14 @@ def enter_mileposts():
         to_milepost_values = [mp for mp in to_milepost_values if mp > from_mp]
 
     with col2:
-        to_mp = st.selectbox(
-            "To Milepost",
-            to_milepost_values,
-            index=None,
-            placeholder="Select End MP",
-            key=f"to_mp_{reset_token}",
-        )
+        if from_mp:
+            to_mp = st.selectbox(
+                "To Milepost",
+                to_milepost_values,
+                index=None,
+                placeholder="Select End MP",
+                key=f"to_mp_{reset_token}",
+            )
 
     st.session_state.mp_from_mp = from_mp
     st.session_state.mp_to_mp = to_mp
