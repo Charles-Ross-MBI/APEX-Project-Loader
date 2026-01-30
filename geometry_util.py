@@ -600,9 +600,12 @@ def enter_mileposts():
     Select a route and choose starting and ending mileposts to generate a route
     segment.
 
-    NEW BEHAVIOR:
-      - No map is rendered until Route Name, From Milepost, and To Milepost are selected.
+    Behaviors:
+      - No map is rendered until Route Name, From MP, and To MP are selected.
       - 'To Milepost' does not appear until 'From Milepost' is selected.
+      - Any change to Route Name / From MP / To MP invalidates downstream content by:
+            st.session_state['selected_route'] = None
+        (does NOT full-reset widgets like CLEAR does).
     """
 
     st.write("")
@@ -628,8 +631,23 @@ def enter_mileposts():
     st.session_state.setdefault("mp_from_mp", None)
     st.session_state.setdefault("mp_to_mp", None)
 
+    # Ensure selected_route key exists; user wants it set to None to invalidate
+    st.session_state.setdefault("selected_route", None)
+
     mileposts = st.session_state["mileposts"]
     reset_token = st.session_state.milepost_widget_reset
+
+    # ---------------------------------------------------------
+    # Small helper: invalidate downstream content without full clear
+    # ---------------------------------------------------------
+    def _invalidate_selected_route():
+        """
+        Invalidate downstream content by clearing selected_route only.
+        Also clears any in-progress preview buffer/map so stale visuals don't remain.
+        """
+        st.session_state["selected_route"] = None
+        st.session_state.milepost_geometry_buffer = []
+        st.session_state.milepost_map_reset += 1
 
     # ---------------------------------------------------------
     # Grab List of Route Names
@@ -642,12 +660,19 @@ def enter_mileposts():
         sort_order="asc",
     )
 
+    # ---------------------------------------------------------
+    # Route dropdown (keyed)
+    # ---------------------------------------------------------
     def _on_route_change():
-        """When route changes, reset MPs and preview so stale selections don't persist."""
+        """
+        When route changes:
+          - reset MPs
+          - invalidate downstream content (selected_route=None)
+          - clear preview buffer & bump map reset token
+        """
         st.session_state.mp_from_mp = None
         st.session_state.mp_to_mp = None
-        st.session_state.milepost_geometry_buffer = []
-        st.session_state.milepost_map_reset += 1
+        _invalidate_selected_route()
 
     route_name = st.selectbox(
         "Route Name",
@@ -659,7 +684,7 @@ def enter_mileposts():
     )
     st.session_state.mp_route_name = route_name
 
-    # Gate: don't show MP controls (or map) until route selected
+    # Gate: no MP widgets/map until route selected
     if route_name is None:
         st.info("Select a route to enable milepost selection.")
         return
@@ -687,17 +712,25 @@ def enter_mileposts():
         sort_order="asc",
     )
 
-    def _on_from_change():
-        """
-        When FROM changes, reset TO and preview so stale TO selection doesn't persist.
-        """
-        st.session_state.mp_to_mp = None
-        st.session_state.milepost_geometry_buffer = []
-        st.session_state.milepost_map_reset += 1
-
     # ---------------------------------------------------------
     # Milepost dropdowns
     # ---------------------------------------------------------
+    def _on_from_change():
+        """
+        When FROM changes:
+          - reset TO
+          - invalidate selected_route
+        """
+        st.session_state.mp_to_mp = None
+        _invalidate_selected_route()
+
+    def _on_to_change():
+        """
+        When TO changes:
+          - invalidate selected_route
+        """
+        _invalidate_selected_route()
+
     col1, col2 = st.columns(2)
 
     with col1:
@@ -712,7 +745,7 @@ def enter_mileposts():
 
     st.session_state.mp_from_mp = from_mp
 
-    # NEW: don't show TO until FROM selected
+    # NEW: hide To MP until From MP is selected
     if from_mp is None:
         st.info("Select a **From Milepost** to enable **To Milepost**.")
         return
@@ -727,6 +760,7 @@ def enter_mileposts():
             index=None,
             placeholder="Select End MP",
             key=f"to_mp_{reset_token}",
+            on_change=_on_to_change,
         )
 
     st.session_state.mp_to_mp = to_mp
@@ -780,9 +814,11 @@ def enter_mileposts():
     # LOAD + CLEAR buttons
     # ---------------------------------------------------------
     def _clear_milepost_tool_state():
-        """Clear route preview + saved geometry + all widget selections."""
+        """
+        Full clear: preview + saved geometry + all widget selections.
+        """
         st.session_state.milepost_geometry_buffer = []
-        st.session_state["selected_route"] = []
+        st.session_state["selected_route"] = None
 
         st.session_state.mp_route_name = None
         st.session_state.mp_from_mp = None
@@ -795,6 +831,7 @@ def enter_mileposts():
     with bottom:
         c1, c2 = st.columns([1, 1])
 
+        # LOAD
         with c1:
             if st.button("LOAD", use_container_width=True, type="primary"):
                 if st.session_state.milepost_geometry_buffer:
@@ -804,6 +841,7 @@ def enter_mileposts():
                 else:
                     st.info("No geometry to load.")
 
+        # CLEAR
         with c2:
             if st.button("CLEAR", use_container_width=True):
                 _clear_milepost_tool_state()
