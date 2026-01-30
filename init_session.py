@@ -239,7 +239,7 @@ def init_session_state():
         "impact_routes_url": f"{apex_url}/9",
         "contacts_url": f"{apex_url}/10",
         "aashtoware_url": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
-        "mileposts": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer"
+        "milepoints": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer"
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
