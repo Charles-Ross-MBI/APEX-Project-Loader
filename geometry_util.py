@@ -601,8 +601,8 @@ def enter_mileposts():
     segment.
 
     NEW BEHAVIOR:
-        - No map is rendered until Route Name, From Milepost, and To Milepost
-          are all selected.
+      - No map is rendered until Route Name, From Milepost, and To Milepost are selected.
+      - 'To Milepost' does not appear until 'From Milepost' is selected.
     """
 
     st.write("")
@@ -622,17 +622,14 @@ def enter_mileposts():
     # ---------------------------------------------------------
     st.session_state.setdefault("milepost_geometry_buffer", [])
     st.session_state.setdefault("milepost_map_reset", 0)
-
-    # A token to force widget keys to change on CLEAR (hard reset)
     st.session_state.setdefault("milepost_widget_reset", 0)
 
-    # Explicit state holders for current selections
     st.session_state.setdefault("mp_route_name", None)
     st.session_state.setdefault("mp_from_mp", None)
     st.session_state.setdefault("mp_to_mp", None)
 
-    # Milepost AGOL Layer
     mileposts = st.session_state["mileposts"]
+    reset_token = st.session_state.milepost_widget_reset
 
     # ---------------------------------------------------------
     # Grab List of Route Names
@@ -645,20 +642,13 @@ def enter_mileposts():
         sort_order="asc",
     )
 
-    reset_token = st.session_state.milepost_widget_reset
-
     def _on_route_change():
-        """
-        When route changes, reset MPs and preview so stale selections don't persist.
-        """
+        """When route changes, reset MPs and preview so stale selections don't persist."""
         st.session_state.mp_from_mp = None
         st.session_state.mp_to_mp = None
         st.session_state.milepost_geometry_buffer = []
         st.session_state.milepost_map_reset += 1
 
-    # ---------------------------------------------------------
-    # Route dropdown (keyed)
-    # ---------------------------------------------------------
     route_name = st.selectbox(
         "Route Name",
         route_names,
@@ -667,10 +657,9 @@ def enter_mileposts():
         key=f"route_name_{reset_token}",
         on_change=_on_route_change,
     )
-
     st.session_state.mp_route_name = route_name
 
-    # If route isn't selected, don't show MPs yet and DO NOT show a map
+    # Gate: don't show MP controls (or map) until route selected
     if route_name is None:
         st.info("Select a route to enable milepost selection.")
         return
@@ -689,8 +678,7 @@ def enter_mileposts():
         sort_order="asc",
     )
 
-    
-    to_milepost_values = get_unique_field_values(
+    all_to_milepost_values = get_unique_field_values(
         url=mileposts,
         layer=0,
         field="TO_MPT",
@@ -698,6 +686,14 @@ def enter_mileposts():
         sort_type="numeric",
         sort_order="asc",
     )
+
+    def _on_from_change():
+        """
+        When FROM changes, reset TO and preview so stale TO selection doesn't persist.
+        """
+        st.session_state.mp_to_mp = None
+        st.session_state.milepost_geometry_buffer = []
+        st.session_state.milepost_map_reset += 1
 
     # ---------------------------------------------------------
     # Milepost dropdowns
@@ -711,42 +707,33 @@ def enter_mileposts():
             index=None,
             placeholder="Select Start MP",
             key=f"from_mp_{reset_token}",
+            on_change=_on_from_change,
         )
 
+    st.session_state.mp_from_mp = from_mp
+
+    # NEW: don't show TO until FROM selected
+    if from_mp is None:
+        st.info("Select a **From Milepost** to enable **To Milepost**.")
+        return
+
     # Filter TO_MPT so it must be > FROM_MPT
-    if from_mp is not None:
-        to_milepost_values = [mp for mp in to_milepost_values if mp > from_mp]
+    to_milepost_values = [mp for mp in all_to_milepost_values if mp > from_mp]
 
     with col2:
-        if from_mp:
-            to_mp = st.selectbox(
-                "To Milepost",
-                to_milepost_values,
-                index=None,
-                placeholder="Select End MP",
-                key=f"to_mp_{reset_token}",
-            )
+        to_mp = st.selectbox(
+            "To Milepost",
+            to_milepost_values,
+            index=None,
+            placeholder="Select End MP",
+            key=f"to_mp_{reset_token}",
+        )
 
-    if from_mp:
-        st.session_state.mp_from_mp = from_mp
-    
-    if to_mp:
-        st.session_state.mp_to_mp = to_mp
+    st.session_state.mp_to_mp = to_mp
 
-    # ---------------------------------------------------------
-    # NEW: Gate map rendering until ALL fields are completed
-    # ---------------------------------------------------------
-    missing = []
-    if route_name is None:
-        missing.append("Route Name")
-    if from_mp is None:
-        missing.append("From Milepost")
+    # Gate: no map until all fields complete
     if to_mp is None:
-        missing.append("To Milepost")
-
-    if missing:
-        st.info("Complete the following to show the map preview: " + ", ".join(missing))
-        # IMPORTANT: do not render any map here
+        st.info("Select a **To Milepost** to show the map preview.")
         return
 
     st.write("")
@@ -755,8 +742,6 @@ def enter_mileposts():
     # Get geometry path from AGOL
     # ---------------------------------------------------------
     geometry_path = get_route_segment(route_name, from_mp, to_mp)
-
-    # Store preview in buffer
     st.session_state.milepost_geometry_buffer = geometry_path
 
     # ---------------------------------------------------------
@@ -795,9 +780,7 @@ def enter_mileposts():
     # LOAD + CLEAR buttons
     # ---------------------------------------------------------
     def _clear_milepost_tool_state():
-        """
-        Clear route preview + saved geometry + all widget selections.
-        """
+        """Clear route preview + saved geometry + all widget selections."""
         st.session_state.milepost_geometry_buffer = []
         st.session_state["selected_route"] = []
 
@@ -812,7 +795,6 @@ def enter_mileposts():
     with bottom:
         c1, c2 = st.columns([1, 1])
 
-        # LOAD
         with c1:
             if st.button("LOAD", use_container_width=True, type="primary"):
                 if st.session_state.milepost_geometry_buffer:
@@ -822,7 +804,6 @@ def enter_mileposts():
                 else:
                     st.info("No geometry to load.")
 
-        # CLEAR
         with c2:
             if st.button("CLEAR", use_container_width=True):
                 _clear_milepost_tool_state()
