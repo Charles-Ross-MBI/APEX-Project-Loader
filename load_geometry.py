@@ -8,7 +8,7 @@ Purpose:
     Provides the Streamlit UI that guides users through selecting a project
     geometry for upload (site/route/boundary) using multiple input methods:
       - Shapefile upload (ZIP)
-      - Manual entry (lat/lon or mileposts)
+      - Manual entry (lat/lon or milepoints)
       - Draw on map
       - AASHTOWare point (when available for site projects)
 
@@ -72,7 +72,7 @@ from geometry_util import (
     polyline_shapefile,
     polygon_shapefile,
     enter_latlng,
-    enter_mileposts,
+    enter_milepoints,
     draw_point,
     draw_line,
     draw_boundary,
@@ -361,7 +361,7 @@ def load_geometry_app():
 
     elif project_type.startswith("Route"):
         # Route projects use line-based geometry capture.
-        options = ["Upload Shapefile", "Enter Mileposts", "Draw Route on Map"]
+        options = ["Upload Shapefile", "Enter Milepoints", "Draw Route on Map"]
 
         option = _segmented_with_safe_default("Choose Upload Method:", options, "option")
         _handle_upload_method_change(option, clear_boundary=False)
@@ -369,8 +369,8 @@ def load_geometry_app():
         if option == "Upload Shapefile":
             polyline_shapefile()
             st.session_state.selected_point = None
-        elif option == "Enter Mileposts":
-            enter_mileposts()
+        elif option == "Enter Milepoints":
+            enter_milepoints()
             st.session_state.selected_point = None
         elif option == "Draw Route on Map":
             draw_line()

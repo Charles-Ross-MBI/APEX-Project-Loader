@@ -595,7 +595,7 @@ def enter_latlng():
 
 
 
-def enter_mileposts():
+def enter_milepoints():
     """
     Select a route and choose starting and ending mileposts to generate a route
     segment.
@@ -634,8 +634,8 @@ def enter_mileposts():
     # Ensure selected_route key exists; user wants it set to None to invalidate
     st.session_state.setdefault("selected_route", None)
 
-    mileposts = st.session_state["mileposts"]
-    reset_token = st.session_state.milepost_widget_reset
+    milepoints = st.session_state["milepoints"]
+    reset_token = st.session_state.milepoints_widget_reset
 
     # ---------------------------------------------------------
     # Small helper: invalidate downstream content without full clear
@@ -646,14 +646,14 @@ def enter_mileposts():
         Also clears any in-progress preview buffer/map so stale visuals don't remain.
         """
         st.session_state["selected_route"] = None
-        st.session_state.milepost_geometry_buffer = []
-        st.session_state.milepost_map_reset += 1
+        st.session_state.milepoints_geometry_buffer = []
+        st.session_state.milepoints_map_reset += 1
 
     # ---------------------------------------------------------
     # Grab List of Route Names
     # ---------------------------------------------------------
     route_names = get_unique_field_values(
-        url=mileposts,
+        url=milepoints,
         layer=0,
         field="ROUTE_NAME",
         sort_type="alpha",
@@ -686,16 +686,16 @@ def enter_mileposts():
 
     # Gate: no MP widgets/map until route selected
     if route_name is None:
-        st.info("Select a route to enable milepost selection.")
+        st.info("Select a route to enable milepoints selection.")
         return
 
     # ---------------------------------------------------------
-    # Milepost values based on route
+    # Milepoints values based on route
     # ---------------------------------------------------------
     safe_route = route_name.replace("'", "''")
 
-    from_milepost_values = get_unique_field_values(
-        url=mileposts,
+    from_milepoint_values = get_unique_field_values(
+        url=milepoints,
         layer=0,
         field="FROM_MPT",
         where=f"ROUTE_NAME='{safe_route}'",
@@ -703,8 +703,8 @@ def enter_mileposts():
         sort_order="asc",
     )
 
-    all_to_milepost_values = get_unique_field_values(
-        url=mileposts,
+    all_to_milepoint_values = get_unique_field_values(
+        url=milepoints,
         layer=0,
         field="TO_MPT",
         where=f"ROUTE_NAME='{safe_route}'",
@@ -713,7 +713,7 @@ def enter_mileposts():
     )
 
     # ---------------------------------------------------------
-    # Milepost dropdowns
+    # Milepoints dropdowns
     # ---------------------------------------------------------
     def _on_from_change():
         """
@@ -735,8 +735,8 @@ def enter_mileposts():
 
     with col1:
         from_mp = st.selectbox(
-            "From Milepost",
-            from_milepost_values,
+            "From Milepoint",
+            from_milepoint_values,
             index=None,
             placeholder="Select Start MP",
             key=f"from_mp_{reset_token}",
@@ -747,16 +747,16 @@ def enter_mileposts():
 
     # NEW: hide To MP until From MP is selected
     if from_mp is None:
-        st.info("Select a **From Milepost** to enable **To Milepost**.")
+        st.info("Select a **From Milepoint** to enable **To Milepoint**.")
         return
 
     # Filter TO_MPT so it must be > FROM_MPT
-    to_milepost_values = [mp for mp in all_to_milepost_values if mp > from_mp]
+    to_milepoint_values = [mp for mp in all_to_milepoint_values if mp > from_mp]
 
     with col2:
         to_mp = st.selectbox(
-            "To Milepost",
-            to_milepost_values,
+            "To Milepoint",
+            to_milepoint_values,
             index=None,
             placeholder="Select End MP",
             key=f"to_mp_{reset_token}",
@@ -767,7 +767,7 @@ def enter_mileposts():
 
     # Gate: no map until all fields complete
     if to_mp is None:
-        st.info("Select a **To Milepost** to show the map preview.")
+        st.info("Select a **To Milepoint** to show the map preview.")
         return
 
     st.write("")
@@ -776,7 +776,7 @@ def enter_mileposts():
     # Get geometry path from AGOL
     # ---------------------------------------------------------
     geometry_path = get_route_segment(route_name, from_mp, to_mp)
-    st.session_state.milepost_geometry_buffer = geometry_path
+    st.session_state.milepoint_geometry_buffer = geometry_path
 
     # ---------------------------------------------------------
     # Build Folium map (ONLY now)
@@ -785,7 +785,7 @@ def enter_mileposts():
     from streamlit_folium import st_folium
 
     m = folium.Map(location=[64.0, -152.0], zoom_start=4)
-    fg = folium.FeatureGroup(name="Milepost Geometry").add_to(m)
+    fg = folium.FeatureGroup(name="Milepoint Geometry").add_to(m)
 
     if geometry_path:
         folium.PolyLine(
@@ -799,7 +799,7 @@ def enter_mileposts():
         lons = [p[1] for p in geometry_path]
         m.fit_bounds([[min(lats), min(lons)], [max(lats), max(lons)]])
     else:
-        st.warning("No route segment geometry returned for the selected mileposts.")
+        st.warning("No route segment geometry returned for the selected milepoints.")
 
     add_small_geocoder(m)
 
@@ -807,25 +807,25 @@ def enter_mileposts():
         m,
         width=700,
         height=500,
-        key=f"milepost_map_{st.session_state.milepost_map_reset}",
+        key=f"milepoint_map_{st.session_state.milepoint_map_reset}",
     )
 
     # ---------------------------------------------------------
     # LOAD + CLEAR buttons
     # ---------------------------------------------------------
-    def _clear_milepost_tool_state():
+    def _clear_milepoint_tool_state():
         """
         Full clear: preview + saved geometry + all widget selections.
         """
-        st.session_state.milepost_geometry_buffer = []
+        st.session_state.milepoint_geometry_buffer = []
         st.session_state["selected_route"] = None
 
         st.session_state.mp_route_name = None
         st.session_state.mp_from_mp = None
         st.session_state.mp_to_mp = None
 
-        st.session_state.milepost_widget_reset += 1
-        st.session_state.milepost_map_reset += 1
+        st.session_state.milepoint_widget_reset += 1
+        st.session_state.milepoint_map_reset += 1
 
     bottom = st.container()
     with bottom:
@@ -834,9 +834,9 @@ def enter_mileposts():
         # LOAD
         with c1:
             if st.button("LOAD", use_container_width=True, type="primary"):
-                if st.session_state.milepost_geometry_buffer:
+                if st.session_state.milepoint_geometry_buffer:
                     st.session_state["selected_route"] = [
-                        list(st.session_state.milepost_geometry_buffer)
+                        list(st.session_state.milepoint_geometry_buffer)
                     ]
                 else:
                     st.info("No geometry to load.")
@@ -844,7 +844,7 @@ def enter_mileposts():
         # CLEAR
         with c2:
             if st.button("CLEAR", use_container_width=True):
-                _clear_milepost_tool_state()
+                _clear_milepoint_tool_state()
                 st.rerun()
 
     st.markdown("", unsafe_allow_html=True)
