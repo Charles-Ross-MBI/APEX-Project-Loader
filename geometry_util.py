@@ -623,9 +623,9 @@ def enter_milepoints():
     # ---------------------------------------------------------
     # Session state initialization
     # ---------------------------------------------------------
-    st.session_state.setdefault("milepost_geometry_buffer", [])
-    st.session_state.setdefault("milepost_map_reset", 0)
-    st.session_state.setdefault("milepost_widget_reset", 0)
+    st.session_state.setdefault("milepoint_geometry_buffer", [])
+    st.session_state.setdefault("milepoint_map_reset", 0)
+    st.session_state.setdefault("milepoint_widget_reset", 0)
 
     st.session_state.setdefault("mp_route_name", None)
     st.session_state.setdefault("mp_from_mp", None)
