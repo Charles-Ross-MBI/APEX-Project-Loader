@@ -1059,3 +1059,112 @@ class AGOLDataLoader:
             "message": self.message,
             "globalids": self.globalids
         }
+
+
+
+
+class AGOLRecordLoader:
+    """
+    Loads one or more AGOL records using select_record() and stores
+    all attributes + geometry into Streamlit session_state.
+
+    If multiple records are returned:
+        - Each attribute becomes a list of values
+        - Geometry becomes a list of geometries
+
+    Access values through:
+        loader.attributes
+        loader.geometry
+        loader.<fieldname>  (dynamic attributes)
+    """
+
+    def __init__(self, url, id_field, id_value,
+                 prefix="", fields="*", return_geometry=True):
+
+        self.url = url
+        self.id_field = id_field
+        self.id_value = id_value
+        self.fields = fields
+        self.return_geometry = return_geometry
+
+        # Normalize prefix
+        self.prefix = prefix.rstrip("_") + "_" if prefix else ""
+
+        # Fetch records (may be 1 or many)
+        self.records = self._fetch_records()
+
+        # Extract combined attributes + geometry
+        self.attributes = self._combine_attributes()
+        self.geometry = self._combine_geometries()
+
+        # Store in session_state
+        self._store_in_session_state()
+
+        # Create dynamic attributes for direct access
+        self._create_dynamic_attributes()
+
+    # ---------------------------------------------------------
+    # Fetch records from AGOL
+    # ---------------------------------------------------------
+    def _fetch_records(self):
+        results = select_record(
+            url=self.url,
+            id_field=self.id_field,
+            id_value=self.id_value,
+            fields=self.fields,
+            return_geometry=self.return_geometry
+        )
+
+        if not results:
+            raise ValueError(f"No record found for {self.id_field} = {self.id_value}")
+
+        return results  # <-- now returns ALL records
+
+    # ---------------------------------------------------------
+    # Combine attributes across multiple records
+    # ---------------------------------------------------------
+    def _combine_attributes(self):
+        combined = {}
+
+        for feature in self.records:
+            attrs = feature.get("attributes", {})
+            for key, value in attrs.items():
+                key_lower = key.lower()
+                combined.setdefault(key_lower, []).append(value)
+
+        # If only one record, unwrap lists
+        for key in combined:
+            if len(combined[key]) == 1:
+                combined[key] = combined[key][0]
+
+        return combined
+
+    # ---------------------------------------------------------
+    # Combine geometries across multiple records
+    # ---------------------------------------------------------
+    def _combine_geometries(self):
+        geoms = [f.get("geometry") for f in self.records]
+
+        # If only one geometry, unwrap it
+        if len(geoms) == 1:
+            return geoms[0]
+
+        return geoms  # list of geometries
+
+    # ---------------------------------------------------------
+    # Store values in Streamlit session_state
+    # ---------------------------------------------------------
+    def _store_in_session_state(self):
+        for key, value in self.attributes.items():
+            st.session_state[f"{self.prefix}{key}"] = value
+
+        st.session_state[f"{self.prefix}geometry"] = self.geometry
+
+    # ---------------------------------------------------------
+    # Create dynamic attributes for direct access
+    # ---------------------------------------------------------
+    def _create_dynamic_attributes(self):
+        for key, value in self.attributes.items():
+            setattr(self, key, value)
+
+        setattr(self, "geometry", self.geometry)

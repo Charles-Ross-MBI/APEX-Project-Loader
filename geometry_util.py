@@ -772,11 +772,13 @@ def enter_milepoints():
 
     st.write("")
 
+    
     # ---------------------------------------------------------
     # Get geometry path from AGOL
     # ---------------------------------------------------------
-    geometry_path = get_route_segment(route_name, from_mp, to_mp)
-    st.session_state.milepoint_geometry_buffer = geometry_path
+    geometry_path = get_route_segment(route_name, from_mp, to_mp) or []
+    st.session_state.milepoints_geometry_buffer = geometry_path
+
 
     # ---------------------------------------------------------
     # Build Folium map (ONLY now)
