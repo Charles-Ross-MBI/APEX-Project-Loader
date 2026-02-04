@@ -296,6 +296,7 @@ def draw_line():
             if st.button("LOAD", use_container_width=True, type = 'primary'):
                 if latest_routes:
                     st.session_state["selected_route"] = latest_routes
+                    st.markdown(st.session_state["selected_route"])
         with col2:
             if st.button("CLEAR", use_container_width=True):
                 st.session_state["selected_route"] = []
@@ -771,7 +772,6 @@ def enter_milepoints():
         return
 
     st.write("")
-
     
     # ---------------------------------------------------------
     # Get geometry path from AGOL

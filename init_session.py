@@ -203,11 +203,17 @@ def init_session_state():
     for key, value in url_params.items():
         st.session_state.setdefault(key, value)
 
+
+
     # -------------------------------------------------------------------------
     # AGOL URLS
     # -------------------------------------------------------------------------
-    # Main APEX URL
-    apex_url = 'https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_4c8488c7bb7b4f15a381cb3786da94e6/FeatureServer'
+    # Convenience per-layer URLs (FeatureServer/{layer})
+    agol_urls = {
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_4c8488c7bb7b4f15a381cb3786da94e6/FeatureServer",
+        "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
+        "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer"
+    }
 
     # Layer indices used by loaders and query helpers
     apex_layers = {
@@ -222,24 +228,6 @@ def init_session_state():
         "house_layer": 8,
         "impact_routes_layer": 9,
         "contacts_layer": 10,
-    }
-
-    # Convenience per-layer URLs (FeatureServer/{layer})
-    agol_urls = {
-        'apex_url': apex_url,
-        "projects_url": f"{apex_url}/0",
-        "sites_url": f"{apex_url}/1",
-        "routes_url": f"{apex_url}/2",
-        "boundaries_url": f"{apex_url}/3",
-        "impact_comms_url": f"{apex_url}/4",
-        "region_url": f"{apex_url}/5",
-        "bor_url": f"{apex_url}/6",
-        "senate_url": f"{apex_url}/7",
-        "house_url": f"{apex_url}/8",
-        "impact_routes_url": f"{apex_url}/9",
-        "contacts_url": f"{apex_url}/10",
-        "aashtoware_url": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
-        "milepoints": f"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer"
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
