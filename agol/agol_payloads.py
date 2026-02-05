@@ -393,13 +393,14 @@ def project_payload():
                         "AWP_Update": st.session_state.get("awp_update", None)
                     },
                     "geometry": {
-                        "x": center[1] if center else None,  # longitude
-                        "y": center[0] if center else None,  # latitude
+                        "x": center[0] if center else None,  # longitude
+                        "y": center[1] if center else None,  # latitude
                         "spatialReference": {"wkid": 4326}
                     }
                 }
             ]
         }
+        st.session_state['debug'] = payload
         return clean_payload(payload)
     except Exception as e:
         # Bubble up error so caller can handle with st.error
