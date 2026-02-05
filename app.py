@@ -57,7 +57,7 @@ def prev_step():
 
 
 # Header and progress
-st.title("📝 ADD NEW APEX PROJECT")
+st.title("📝 ADD NEW APEX PROJECT ADD NEW TEXT HERE")
 st.markdown("##### COMPLETE STEPS TO ADD A NEW PROJECT TO THE APEX DATABASE")
 st.progress(st.session_state.step / TOTAL_STEPS)
 st.caption(f"Step {st.session_state.step} of {TOTAL_STEPS}")
