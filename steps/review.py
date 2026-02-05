@@ -2,7 +2,7 @@
 import streamlit as st
 from streamlit_folium import st_folium
 import folium
-from map_util import set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom, set_center
+from util.map_util import set_bounds_point, set_bounds_route, set_bounds_boundary, set_zoom, set_center
 
 
 # ----------------------------------------------------------------------
@@ -221,12 +221,21 @@ def review_information():
         else:
             st.markdown(f"**Public Project Description:**\n\n{st.session_state.get('proj_desc','')}")
 
-    # Status & Links
-    with st.expander("Links", expanded=True):
+
+    # Contact
+    with st.expander("Contact", expanded=True):
+        st.markdown(f"**Name:** {st.session_state.get('awp_contact_name','—')}")
+        st.markdown(f"**Role:** {st.session_state.get('awp_contact_role','—')}")
         col1, col2 = st.columns(2)
-        col1.markdown(f"**Project Website:** {st.session_state.get('proj_web','—')}")
-        col2.markdown(f"**APEX Mapper Link:** {st.session_state.get('apex_mapper_link','—')}")
-        col1.markdown(f"**APEX Info Sheet:** {st.session_state.get('apex_infosheet','—')}")
+        with col1:
+            st.markdown(f"**Email:** {st.session_state.get('awp_contact_email','—')}")
+        with col2:
+            st.markdown(f"**Phone:** {st.session_state.get('awp_contact_phone','—')}")
+
+    # Web Links
+    with st.expander("Web Links", expanded=True):
+        st.markdown(f"**Project Website:** {st.session_state.get('proj_web','—')}")
+        
 
     
      # Geography
@@ -257,19 +266,3 @@ def review_information():
 
     st.write("")
     st.write("")
-
-    # --- Contacts ---
-    header_with_edit("CONTACTS", target_step=3, help="Edit project contacts")
-    contacts = st.session_state.get("project_contacts", [])
-    if contacts:
-        if isinstance(contacts[0], dict):
-            st.table(contacts)
-        else:
-            for contact in contacts:
-                st.write(contact)
-    else:
-        st.write("— No contacts provided —")
-
-    st.write("")
-    st.write("")
-

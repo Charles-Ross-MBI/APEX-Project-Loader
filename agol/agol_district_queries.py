@@ -10,7 +10,7 @@ Updated:
 
 import streamlit as st
 import re
-from agol_util import AGOLQueryIntersect
+from agol.agol_util import AGOLQueryIntersect
 
 
 # =============================================================================
@@ -481,8 +481,8 @@ def run_district_queries():
 
     # House
     house_res = _agol_intersect_adaptive(
-        url=st.session_state['house_intersect'],
-        layer=0,
+        url=st.session_state['house_intersect']['url'],
+        layer=st.session_state['house_intersect']['layer'],
         geometry=geom,
         fields="GlobalID,DISTRICT",
         return_geometry=False,
@@ -496,8 +496,8 @@ def run_district_queries():
 
     # Senate
     senate_res = _agol_intersect_adaptive(
-        url=st.session_state['senate_intersect'],
-        layer=0,
+        url=st.session_state['senate_intersect']['url'],
+        layer=st.session_state['senate_intersect']['layer'],
         geometry=geom,
         fields="GlobalID,DISTRICT",
         return_geometry=False,
@@ -511,8 +511,8 @@ def run_district_queries():
 
     # Borough
     borough_res = _agol_intersect_adaptive(
-        url=st.session_state['bor_intersect'],
-        layer=0,
+        url=st.session_state['borough_intersect']['url'],
+        layer=st.session_state['borough_intersect']['layer'],
         geometry=geom,
         fields="GlobalID,NameAlt",
         return_geometry=False,
@@ -526,8 +526,8 @@ def run_district_queries():
 
     # Region
     region_res = _agol_intersect_adaptive(
-        url=st.session_state['region_intersect'],
-        layer=0,
+        url=st.session_state['region_intersect']['url'],
+        layer=st.session_state['region_intersect']['layer'],
         geometry=geom,
         fields="GlobalID,NameAlt",
         return_geometry=False,
@@ -542,8 +542,8 @@ def run_district_queries():
     # Routes (only when route/boundary context)
     if st.session_state.get('selected_route') or st.session_state.get('selected_boundary'):
         route_res = _agol_intersect_adaptive(
-            url=st.session_state['route_intersect'],
-            layer=0,
+            url=st.session_state['route_intersect']['url'],
+        layer=st.session_state['route_intersect']['layer'],
             geometry=geom,
             fields="Route_ID,Route_Name_Unique",
             return_geometry=False,

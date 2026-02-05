@@ -19,246 +19,18 @@ Key behaviors:
 
 import streamlit as st
 import datetime
-from agol_util import get_multiple_fields, select_record
-
-
-# =============================================================================
-# READ-ONLY DISPLAY LAYER (CSS)
-# =============================================================================
-# This CSS supports the "read-only widget" pattern:
-# - ro()        : single-line boxed field
-# - ro_textarea(): multi-line boxed field
-# - ro_widget() : stores to session_state + renders ro/ro_textarea
-#
-# This keeps AASHTOWare mode visually read-only but still behaves like widgets.
-# =============================================================================
-_RO_CSS = """
-<style>
-.ro-field { margin-bottom: 0.75rem; }
-.ro-label { font-size: 0.875rem; color: #6b7280; margin-bottom: 0.25rem; }
-.ro-box {
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  border-radius: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  color: #111827;
-  font-size: 0.95rem;
-  min-height: 38px;
-  display: flex; align-items: center;
-  word-break: break-word;
-}
-.ro-box.mono { font-variant-numeric: tabular-nums; }
-.ro-box .placeholder { color: #9ca3af; }
-.ro-box-textarea {
-  border: 1px solid #e5e7eb;
-  background: #f9fafb;
-  border-radius: 0.375rem;
-  padding: 0.5rem 0.75rem;
-  color: #111827;
-  font-size: 0.95rem;
-  min-height: 160px;
-  white-space: pre-wrap;
-  word-break: break-word;
-  display: block;
-}
-.ro-box-textarea .placeholder { color: #9ca3af; }
-</style>
-"""
-
-
-# =============================================================================
-# FORMATTERS (DISPLAY / INPUT NORMALIZATION)
-# =============================================================================
-# These helpers sanitize or format values coming from:
-#   - AASHTOWare-populated st.session_state (strings, ints, ISO-like date strings)
-#   - User inputs (Streamlit widgets)
-# =============================================================================
-def fmt_string(value):
-    # Normalizes string display values:
-    # - None => ""
-    # - "none"/"" => ""
-    # - otherwise stripped string
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        cleaned = value.strip()
-        if cleaned == "" or cleaned.lower() == "none":
-            return ""
-        return cleaned
-    return value
-
-
-def fmt_int(val, year=False):
-    """Return an integer formatted with commas, or return the original value."""
-    # NOTE:
-    # - year=False: apply commas (10,000)
-    # - year=True : return plain int (years shouldn't be comma formatted)
-    if year == False:
-        if isinstance(val, int):
-            return f"{val:,}"
-    else:
-        if isinstance(val, int):
-            return val
-    return val
-
-
-def fmt_date(val):
-    # Display helper:
-    # Accepts datetime/date objects or ISO-like strings.
-    if not val:
-        return ""
-    if isinstance(val, (datetime.datetime, datetime.date)):
-        return val.strftime("%m/%d/%Y")
-    try:
-        d = datetime.datetime.fromisoformat(val).date()
-        return d.strftime("%m/%d/%Y")
-    except Exception:
-        return str(val)
-
-
-def fmt_date_or_none(val):
-    """
-    Input helper:
-      Returns a datetime.date (for Streamlit date_input) or None.
-
-    Accepted formats:
-      - datetime.date / datetime.datetime
-      - Strings:
-          MM/DD/YYYY
-          YYYY-MM-DD
-          MM-DD-YYYY
-          ISO-ish: YYYY-MM-DDTHH:MM:SS(.fff)(Z|+00:00)
-
-    Anything else => None (safe for date_input).
-    """
-    # datetime.datetime is also a datetime.date, so check it first
-    if isinstance(val, datetime.datetime):
-        return val.date()
-
-    if isinstance(val, datetime.date):
-        return val
-
-    if isinstance(val, str):
-        s = val.strip()
-        if not s:
-            return None
-
-        # Treat common "not a date" placeholders as empty
-        if s.lower() in ("none", "null", "nan", "n/a", "na", "tbd"):
-            return None
-
-        # Strip time if ISO-like
-        if "T" in s:
-            s = s.split("T", 1)[0]
-        elif " " in s:
-            left = s.split(" ", 1)[0]
-            if len(left) == 10 and left[4] == "-" and left[7] == "-":
-                s = left
-
-        # Try common date formats
-        for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%m-%d-%Y"):
-            try:
-                return datetime.datetime.strptime(s, fmt).date()
-            except ValueError:
-                pass
-
-    return None
-
-
-def fmt_int_or_none(val):
-    # Streamlit number_input "value" must be numeric or None.
-    # Reject bool because bool is subclass of int.
-    if isinstance(val, bool):
-        return None
-    return val if isinstance(val, int) else None
-
-
-def fmt_currency(val):
-    # Display helper:
-    # Convert to float and format currency; otherwise return string/empty.
-    try:
-        f = float(val)
-        return f"${f:,.2f}"
-    except Exception:
-        return str(val) if val else ""
-
-
-# =============================================================================
-# READ-ONLY FIELD RENDERERS
-# =============================================================================
-# These helpers render read-only fields using HTML/CSS and are used in AWP mode.
-# =============================================================================
-def ro(label, value, mono=False):
-    # Render a single-line read-only field with label.
-    safe_value = value if value not in (None, "") else '<span class="placeholder">—</span>'
-    st.markdown(
-        f"""
-        <div class="ro-field">
-          <div class="ro-label">{label}</div>
-          <div class="ro-box{' mono' if mono else ''}">{safe_value}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def ro_cols(specs):
-    # Convenience renderer for column-based layouts:
-    # specs = [(col, label, value, mono), ...]
-    for col, label, value, mono in specs:
-        with col:
-            ro(label, value, mono)
-
-
-def ro_textarea(label, value):
-    # Render a multi-line read-only field with label.
-    safe_value = value if value not in (None, "") else '<span class="placeholder">—</span>'
-    st.markdown(
-        f"""
-        <div class="ro-field">
-          <div class="ro-label">{label}</div>
-          <div class="ro-box-textarea">{safe_value}</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
-def ro_widget(key, label, value, mono=False, textarea=False):
-    """
-    Read-only widget wrapper:
-      - Writes value into st.session_state[key] (like a real widget)
-      - Renders the value using ro() or ro_textarea()
-
-    This keeps downstream logic consistent regardless of source mode.
-    """
-    # Persist value exactly like a widget
-    st.session_state[key] = value
-
-    # Render using your existing components
-    if textarea:
-        ro_textarea(label, value)
-    else:
-        ro(label, value, mono)
-
-
-# =============================================================================
-# WIDGET KEY MANAGEMENT (PREVENTS MODE BLEED)
-# =============================================================================
-# Streamlit retains widget values by key. When switching AWP <-> UI, we need
-# distinct widget keys (and a version bump) to force clean widget instantiation.
-# =============================================================================
-def widget_key(name: str, version: int, is_awp: bool) -> str:
-    """
-    Build a per-source, per-version widget key so Streamlit treats AWP and UI
-    as distinct controls and doesn't retain values across source switches.
-
-    Result format:
-      - AASHTOWare: awp_widget_key_<name>_<version>
-      - User Input : ui_widget_key_<name>_<version>
-    """
-    prefix = "awp_widget_key" if is_awp else "ui_widget_key"
-    return f"{prefix}_{name}_{version}"
+from agol.agol_util import get_multiple_fields, select_record
+from util.read_only_util import ro_widget
+from util.input_util import (
+    fmt_currency, 
+    fmt_date, 
+    fmt_date_or_none, 
+    fmt_int, 
+    fmt_int_or_none, 
+    fmt_string,
+    year_to_mmddyyyy,
+    widget_key
+)
 
 
 # =============================================================================
@@ -430,35 +202,42 @@ def aashtoware_project():
     version = st.session_state.get("form_version", 0)
     widget_key = f"awp_project_select_{version}"
 
-    # -------------------------------------------------------------------------
+    # ------------------------------------------------------------
     # 1) Sync selection when returning to an entry
-    # -------------------------------------------------------------------------
-    # If a GUID is already driving the form (awp_guid / aashto_id),
-    # make sure the dropdown reflects it.
+    # ------------------------------------------------------------
     active_gid = st.session_state.get("awp_guid") or st.session_state.get("aashto_id")
-    if active_gid:
-        active_label = gid_to_label.get(active_gid)
-        if active_label:
-            # canonical selection state
-            st.session_state["aashto_id"] = active_gid
-            st.session_state["aashto_label"] = active_label
-            st.session_state["aashto_selected_project"] = active_label
-            
-            # keep widget display in sync (BUT don't depend on on_change)
-            if widget_key not in st.session_state and active_label:
-                st.session_state[widget_key] = active_label
+    active_label = gid_to_label.get(active_gid) if active_gid else None
 
+    if active_gid and active_label:
+        # canonical selection state
+        st.session_state["aashto_id"] = active_gid
+        st.session_state["aashto_label"] = active_label
+        st.session_state["aashto_selected_project"] = active_label
 
-    # -------------------------------------------------------------------------
-    # 2) Determine displayed selection
-    # -------------------------------------------------------------------------
-    prev_label = st.session_state.get("aashto_label")
-    initial_index = labels.index(prev_label) if prev_label in labels else 0
+    # ------------------------------------------------------------
+    # 2) Seed widget display value WITHOUT using index=
+    #    (prevents "default value AND Session State" warning)
+    # ------------------------------------------------------------
+    # Decide what the selectbox should show
+    desired_label = st.session_state.get(widget_key)
 
-    # -------------------------------------------------------------------------
+    if desired_label not in labels:
+        # Prefer canonical label if valid
+        desired_label = st.session_state.get("aashto_label")
+    if desired_label not in labels:
+        # Then try label resolved from active GUID
+        desired_label = active_label
+    if desired_label not in labels:
+        # Finally fall back to placeholder
+        desired_label = placeholder_label
+
+    # Seed widget state only if missing/invalid
+    if st.session_state.get(widget_key) not in labels:
+        st.session_state[widget_key] = desired_label
+
+    # ------------------------------------------------------------
     # 3) Callback: ONLY update selection state
-    # -------------------------------------------------------------------------
-    # (Do not load record here; that will happen below.)
+    # ------------------------------------------------------------
     def _on_project_change():
         selected_label = st.session_state[widget_key]
         if selected_label == placeholder_label:
@@ -473,15 +252,13 @@ def aashtoware_project():
         st.session_state["aashto_label"] = selected_label
         st.session_state["aashto_id"] = selected_gid
         st.session_state["aashto_selected_project"] = selected_label
-        # keep guid aligned with selection
         st.session_state["awp_guid"] = selected_gid
         st.session_state["awp_update"] = "Yes"
 
-    # Render widget
+    # Render widget (NO index= here)
     st.selectbox(
         "AASHTOWare Project List",
         labels,
-        index=initial_index,
         key=widget_key,
         on_change=_on_project_change,
     )
@@ -496,16 +273,39 @@ def aashtoware_project():
     selected_gid = st.session_state.get("aashto_id")
     last_loaded = st.session_state.get("awp_last_loaded_gid")
     if selected_gid and selected_gid != last_loaded:
-        # Clear user-entered fields
+        # Clear user-entered fields (UI mode keys)
         user_keys = [
-            "construction_year", "new_continuing", "proj_name", "iris", "stip", "fed_proj_num",
-            "fund_type", "proj_prac", "anticipated_start", "anticipated_end", "award_date",
-            "award_fiscal_year", "contractor", "awarded_amount", "current_contract_amount",
-            "amount_paid_to_date", "tenadd", "proj_desc", "proj_purp", "proj_impact",
-            "proj_web", "apex_mapper_link", "apex_infosheet", "impact_comm"
+            "construction_year",
+            "phase",
+            "proj_name",
+            "iris",
+            "stip",
+            "fed_proj_num",
+            "fund_type",
+            "proj_prac",
+            "anticipated_start",
+            "anticipated_end",
+            "award_date",
+            "award_fiscal_year",
+            "contractor",
+            "awarded_amount",
+            "current_contract_amount",
+            "amount_paid_to_date",
+            "tenadd",
+            "proj_desc",
+            # CONTACT (new)
+            "awp_contact_name",
+            "awp_contact_role",
+            "awp_contact_email",
+            "awp_contact_phone",
+            # WEB
+            "proj_web",
+            # impacted communities (legacy/shared mirror key used elsewhere)
+            "impact_comm",
         ]
+
         for k in user_keys:
-            st.session_state[k] = "" if k not in ["award_date", "tenadd"] else None
+            st.session_state[k] = "" if k not in ["award_date", "antcipated_start", "anticipated_end", "tenadd"] else None
 
         # Load full AWP record
         record = select_record(aashtoware, 0, "GlobalID", selected_gid)
@@ -536,17 +336,50 @@ def aashtoware_project():
 # - Preload values back into st.session_state upon re-entering a mode
 # =============================================================================
 _PERSISTED_KEYS = [
-    "construction_year", "phase", "proj_name", "iris", "stip", "fed_proj_num",
-    "fund_type", "proj_prac", "anticipated_start", "anticipated_end",
-    "award_date", "award_fiscal_year", "contractor",
-    "awarded_amount", "current_contract_amount", "amount_paid_to_date",
-    "tenadd", "proj_desc", "proj_purp", "proj_impact",
-    "proj_web", "apex_mapper_link", "apex_infosheet",
-    "impact_comm", "impact_comm_ids", "impact_comm_names",
-    # AWP-specific display fields:
-    "awp_proj_name", "awp_proj_desc",
+    # Core fields
+    "construction_year",
+    "phase",
+    "proj_name",
+    "iris",
+    "stip",
+    "fed_proj_num",
+    "fund_type",
+    "proj_prac",
+    "anticipated_start",
+    "anticipated_end",
+
+    # Award info
+    "award_date",
+    "award_fiscal_year",
+    "contractor",
+    "awarded_amount",
+    "current_contract_amount",
+    "amount_paid_to_date",
+    "tenadd",
+
+    # Descriptions / links
+    "proj_desc",
+    "proj_web",
+
+    # Contact (new/current)
+    "awp_contact_name",
+    "awp_contact_role",
+    "awp_contact_email",
+    "awp_contact_phone",
+
+    # Impacted communities (legacy mirror keys used downstream)
+    "impact_comm",
+    "impact_comm_ids",
+    "impact_comm_names",
+
+    # AWP-specific display fields (read-only widgets)
+    "awp_proj_name",
+    "awp_proj_desc",
+
     # identifiers for re-population
-    "aashto_id", "aashto_label", "aashto_selected_project",
+    "aashto_id",
+    "aashto_label",
+    "aashto_selected_project",
 ]
 _SOURCE_SNAPSHOT_KEY = {
     "AASHTOWare Database": "saved_awp",
@@ -706,8 +539,6 @@ def _render_original_form(is_awp: bool):
                 return 0.0
         return v
 
-    # ---- Inject read-only CSS once per render ----
-    st.markdown(_RO_CSS, unsafe_allow_html=True)
 
     # =============================================================================
     # BEGIN FORM (Streamlit form block)
@@ -884,34 +715,32 @@ def _render_original_form(is_awp: bool):
             with col10:
                 ro_widget(
                     key="anticipated_start",
-                    label="Anticipated Begin Year",
-                    value=fmt_int(val("awp_anticipated_construction_begin"), year = True),
+                    label="Anticipated Start",
+                    value=year_to_mmddyyyy(val("awp_anticipated_construction_begin")),
                 )
             with col11:
                 ro_widget(
                     key="anticipated_end",
-                    label="Anticipated End Year",
-                    value=fmt_int(val("awp_anticipated_construction_end"), year = True),
+                    label="Anticipated End",
+                    value=year_to_mmddyyyy(val("awp_anticipated_construction_end")),
                 )
         else:
             col10, col11 = st.columns(2)
             with col10:
-                st.session_state["anticipated_start"] = session_selectbox(
-                    key="anticipated_start",
-                    label="Anticipated Begin Year",
-                    help="The year in which the project was is anticipated to begin",
-                    options=st.session_state['years'],
-                    force_str=is_awp,
-                    is_awp=is_awp,
+                st.session_state["anticipated_start"] = st.date_input(
+                    label="Anticpated Start",
+                    format="MM/DD/YYYY",
+                    value=fmt_date_or_none(st.session_state.get("anticipated_start", None)),
+                    key=widget_key("anticipated_start", version, is_awp),
+                    help="The date the project was awarded to a contractor; sourced from AASHTOWare when available."
                 )
             with col11:
-                st.session_state["anticipated_end"] = session_selectbox(
-                    key="anticipated_end",
-                    label="Anticipated End Year",
-                    help="The year in which the project was is anticipated to be completed",
-                    options=st.session_state['years'],
-                    force_str=is_awp,
-                    is_awp=is_awp,
+                st.session_state["anticipated_end"] = st.date_input(
+                    label="Anticpated End",
+                    format="MM/DD/YYYY",
+                    value=fmt_date_or_none(st.session_state.get("anticipated_end", None)),
+                    key=widget_key("anticipated_end", version, is_awp),
+                    help="The date the project was awarded to a contractor; sourced from AASHTOWare when available."
                 )
 
         st.write("")
@@ -1070,49 +899,88 @@ def _render_original_form(is_awp: bool):
         st.write("")
 
         # ---------------------------------------------------------------------
-        # SECTION 7: WEB LINKS
+        # SECTION 7: CONTACT
         # ---------------------------------------------------------------------
-        st.markdown("<h5>7. WEB LINKS</h4>", unsafe_allow_html=True)
+        st.markdown("<h5>7. CONTACT</h4>", unsafe_allow_html=True)
+        if is_awp:
+            ro_widget(
+                key="awp_contact_name",
+                label="Contact",
+                value=fmt_string(val("awp_contact_name"))
+            )
+            ro_widget(
+                key="awp_contact_role",
+                label="Role",
+                value=fmt_string(val("awp_contact_role"))
+            )
+
+            col18, col19 = st.columns(2)
+            with col18:
+                ro_widget(
+                    key="awp_contact_email",
+                    label="Email",
+                    value=fmt_string(val("awp_contact_email"))
+                )
+            with col19:
+                ro_widget(
+                    key="awp_contact_phone",
+                    label="Phone",
+                    value=fmt_string(val("awp_contact_phone"))
+                )
+        else:
+            st.session_state["awp_contact_name"] = st.text_input(
+                label="Project Website",
+                key=widget_key("awp_contact_name", version, is_awp),
+                value=st.session_state.get("awp_sel_contact_name", ''),
+            )
+            st.session_state["awp_contact_role"] = st.text_input(
+                label="APEX Mapper",
+                key=widget_key("awp_contact_role", version, is_awp),
+                value=st.session_state.get("awp_sel_contact_role", ''),
+            )
+
+            col18, col19 = st.columns(2)
+            with col18:
+                st.session_state["awp_contact_email"] = st.text_input(
+                    label="Email",
+                    key=widget_key("awp_contact_email", version, is_awp),
+                    value=st.session_state.get("awp_contact_email", ''),
+                )
+            with col19:
+                st.session_state["awp_contact_phone"] = st.text_input(
+                    label="Phone",
+                    key=widget_key("awp_contact_phone", version, is_awp),
+                    value=st.session_state.get("awp_contact_phone", ''),
+                )
+
+        st.write("")
+        st.write("")
+
+        # ---------------------------------------------------------------------
+        # SECTION 8:PROJECT WEBSITE
+        # ---------------------------------------------------------------------
+        st.markdown("<h5>8. WEB LINK</h4>", unsafe_allow_html=True)
         if is_awp:
             ro_widget(
                 key="proj_web",
                 label="Project Website",
                 value=fmt_string(val("awp_proj_web"))
             )
-            ro_widget(
-                key="apex_mapper_link",
-                label="APEX Mapper",
-                value=fmt_string(val("awp_apex_mapper_link"))
-            )
-            ro_widget(
-                key="email_signup",
-                label="Email Signup Link",
-                value=fmt_string(val("awp_email_signup"))
-            )
+            
         else:
             st.session_state["proj_web"] = st.text_input(
                 label="Project Website",
                 key=widget_key("proj_web", version, is_awp),
                 value=st.session_state.get("proj_web", ''),
             )
-            st.session_state["apex_mapper_link"] = st.text_input(
-                label="APEX Mapper",
-                key=widget_key("apex_mapper_link", version, is_awp),
-                value=st.session_state.get("apex_mapper_link", ''),
-            )
-            st.session_state["email_signup"] = st.text_input(
-                label="Email Signup Link",
-                key=widget_key("email_signup", version, is_awp),
-                value=st.session_state.get("email_signup", ''),
-            )
-
+           
         st.write("")
         st.write("")
 
         # ---------------------------------------------------------------------
-        # SECTION 8: IMPACTED COMMUNITIES
+        # SECTION 9: IMPACTED COMMUNITIES
         # ---------------------------------------------------------------------
-        st.markdown("<h5>8. IMPACTED COMMUNITIES</h4>", unsafe_allow_html=True)
+        st.markdown("<h5>9. IMPACTED COMMUNITIES</h4>", unsafe_allow_html=True)
         st.session_state["impact_comm"] = impacted_comms_select(is_awp=is_awp)
 
         st.write("")
@@ -1123,7 +991,7 @@ def _render_original_form(is_awp: bool):
         submit_button = st.form_submit_button("SUBMIT INFORMATION", use_container_width=True)
 
         if submit_button:
-
+        
             # Required field rules differ by mode:
             # - AWP: requires Construction Year only
             # - UI : requires Construction Year, Public Project Name, Public Description

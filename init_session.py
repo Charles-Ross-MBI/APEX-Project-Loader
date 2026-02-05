@@ -53,7 +53,7 @@ Notes:
 
 import os
 import streamlit as st
-from agol_util import select_record
+from agol.agol_util import select_record
 
 
 # =============================================================================
@@ -99,7 +99,6 @@ def init_session_state():
         "project_name": "",
         "project_description": "",
         "project_category": None,
-        "project_contacts": [],
         "details_complete": False,
         "duplicate_confirmed": False,
     }
@@ -210,7 +209,7 @@ def init_session_state():
     # -------------------------------------------------------------------------
     # Convenience per-layer URLs (FeatureServer/{layer})
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_4c8488c7bb7b4f15a381cb3786da94e6/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_a7d9cb6cb1ac430484613484afde8cb6/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer"
     }
@@ -226,17 +225,31 @@ def init_session_state():
         "bor_layer": 6,
         "senate_layer": 7,
         "house_layer": 8,
-        "impact_routes_layer": 9,
-        "contacts_layer": 10,
+        "impact_routes_layer": 9
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
-    geography_url = {
-        'region_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_DOT_PF_Regions/FeatureServer",
-        'bor_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_BoroughCensus/FeatureServer",
-        'senate_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_SenateDistricts/FeatureServer",
-        'house_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_HouseDistricts/FeatureServer",
-        'route_intersect': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Roads_AKDOT/FeatureServer"
+    geography_intersects = {
+        "region_intersect": {
+            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_DOT_PF_Regions/FeatureServer",
+            "layer": 0
+        },
+        "borough_intersect": {
+            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_BoroughCensus/FeatureServer",
+            "layer": 0
+        },
+        "senate_intersect": {
+            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_SenateDistricts/FeatureServer",
+            "layer": 0
+        },
+        "house_intersect": {
+            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_HouseDistricts/FeatureServer",
+            "layer": 0
+        },
+        "route_intersect": {
+            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Roads_AKDOT/FeatureServer",
+            "layer": 0
+        }
     }
 
     # Seed layer indices and URLs into session_state
@@ -244,7 +257,7 @@ def init_session_state():
         st.session_state.setdefault(key, value)
     for key, value in agol_urls.items():
         st.session_state.setdefault(key, value)
-    for key, value in geography_url.items():
+    for key, value in geography_intersects.items():
         st.session_state.setdefault(key, value)
 
     # -------------------------------------------------------------------------
@@ -302,8 +315,6 @@ def init_session_state():
         "awp_proj_desc": "awp_project_description",
         "proj_desc": "awp_public_desc",
         "proj_web": "awp_proj_web",
-        "apex_mapper_link": "awp_apex_mapper_link",
-        "email_signup": "awp_email_signup",
     }
     st.session_state['awp_fields'] = AWP_FIELDS
 
@@ -329,16 +340,6 @@ def init_session_state():
         "Lauren Winkler",
         "Other"]
     st.session_state['uploaders'] =uploaders
-
-
-    # ======================================================
-    # AWP Crosswalk (COMPLETE AFTER OFFICIAL UPLOAD)
-    # ======================================================
-    awp_crosswalk = {
-
-    }
-
-    st.session_state['awp_crosswalk'] = AWP_FIELDS
 
     
 # -----------------------------------------------------------------------------

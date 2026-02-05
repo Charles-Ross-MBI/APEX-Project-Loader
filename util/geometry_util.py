@@ -69,8 +69,11 @@ from folium.plugins import Draw, Geocoder
 # Shapefile tools
 import geopandas as gpd
 
-# Shared map helpers
-from map_util import (
+# RO Helper
+from util.read_only_util import ro_widget
+
+# Map Tools
+from util.map_util import (
     add_small_geocoder,
     set_bounds_point,
     set_bounds_route,
@@ -80,7 +83,9 @@ from map_util import (
 )
 
 # Data helpers (milepoint entry)
-from agol_util import get_unique_field_values, get_route_segment
+from agol.agol_util import get_unique_field_values, get_route_segment
+
+
 
 
 # =============================================================================
@@ -296,7 +301,6 @@ def draw_line():
             if st.button("LOAD", use_container_width=True, type = 'primary'):
                 if latest_routes:
                     st.session_state["selected_route"] = latest_routes
-                    st.markdown(st.session_state["selected_route"])
         with col2:
             if st.button("CLEAR", use_container_width=True):
                 st.session_state["selected_route"] = []
@@ -1175,18 +1179,22 @@ def aashtoware_point(lat: float, lon: float):
     )
     st.write(
         "The coordinates below reflect the project’s location in the AASHTOWare database. "
-        "If they are correct, you may continue. If not, please select another geospatial upload option."
+        "If they are correct, you may continue. If not, either correct the point in AASHTOWare or please select another upload option."
     )
 
     # Two columns for lat and lon inputs
     cols = st.columns(2)
     with cols[0]:
-        lat_val = st.number_input(
-            "Latitude", value=float(lat), format="%.6f", key="awp_lat"
+        ro_widget(
+            key="awp_lat",
+            label="Latitude",
+            value=lat,
         )
     with cols[1]:
-        lon_val = st.number_input(
-            "Longitude", value=float(lon), format="%.6f", key="awp_lon"
+        ro_widget(
+            key="awp_lng",
+            label="Longitude",
+            value=lon
         )
 
     # Create map centered on the coordinates
@@ -1205,3 +1213,8 @@ def aashtoware_point(lat: float, lon: float):
             st.session_state["selected_point"] = [[round(float(lat), 6), round(float(lon), 6)]]
         except Exception:
             st.session_state["selected_point"] = None
+
+
+
+def aashtoware_path(mp: float, ep: float):
+    pass

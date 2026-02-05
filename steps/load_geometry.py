@@ -67,7 +67,7 @@ Standard Documentation Additions:
 """
 
 import streamlit as st
-from geometry_util import (
+from util.geometry_util import (
     point_shapefile,
     polyline_shapefile,
     polygon_shapefile,
@@ -77,8 +77,9 @@ from geometry_util import (
     draw_line,
     draw_boundary,
     aashtoware_point,
+    aashtoware_path
 )
-from district_queries import run_district_queries
+from agol.agol_district_queries import run_district_queries
 
 
 # =============================================================================
@@ -320,13 +321,18 @@ def load_geometry_app():
     st.markdown("###### Upload Geospatial Data\n", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
-    # Determine whether AASHTOWare upload option should be offered (Site only)
+    # Determine whether AASHTOWare upload option should be offered (Site + Route Only)
     # -------------------------------------------------------------------------
-    show_awp_option = (
+    show_awp_point_option = (
         project_type.startswith("Site")
         and st.session_state.get("aashto_selected_project")
         and st.session_state.get("awp_dcml_latitude")
         and st.session_state.get("awp_dcml_longitude")
+    )
+
+    show_awp_route_option = (
+        project_type.startswith("Route")
+        and st.session_state.get("aashto_selected_project")
     )
 
     # -------------------------------------------------------------------------
@@ -335,8 +341,13 @@ def load_geometry_app():
     if project_type.startswith("Site"):
         # Site projects use point-based geometry capture.
         options = ["Upload Shapefile", "Enter Latitude/Longitude", "Select Point on Map"]
-        if show_awp_option:
-            options.append("AASHTOWare")
+
+        if show_awp_point_option:
+            # AASHTOWare must be first and preselected when available.
+            options = ["AASHTOWare"] + options
+
+            # Force default selection to AASHTOWare whenever it is offered.
+            st.session_state["option"] = "AASHTOWare"
 
         # Choose upload method and clear geometry if method changed.
         option = _segmented_with_safe_default("Choose Upload Method:", options, "option")
@@ -363,10 +374,22 @@ def load_geometry_app():
         # Route projects use line-based geometry capture.
         options = ["Upload Shapefile", "Enter Milepoints", "Draw Route on Map"]
 
+        if show_awp_route_option:
+            # AASHTOWare must be first and preselected when available.
+            options = ["AASHTOWare"] + options
+
+            # Force default selection to AASHTOWare whenever it is offered.
+            st.session_state["option"] = "AASHTOWare"
+
         option = _segmented_with_safe_default("Choose Upload Method:", options, "option")
         _handle_upload_method_change(option, clear_boundary=False)
 
-        if option == "Upload Shapefile":
+        if option == "AASHTOWare":
+            aashtoware_path(
+                st.session_state.get('midpoint_PLACEHOLDER'),
+                st.session_state.get('endpoint_PLACEHOLDER')
+            )
+        elif option == "Upload Shapefile":
             polyline_shapefile()
             st.session_state.selected_point = None
         elif option == "Enter Milepoints":

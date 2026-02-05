@@ -58,7 +58,7 @@ Notes:
 import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
 import datetime
-from agol_util import select_record
+from agol.agol_util import select_record
 
 # =============================================================================
 # PAYLOAD CLEANING / NORMALIZATION HELPERS
@@ -355,15 +355,16 @@ def project_payload():
                         "Proj_Type": proj_type,
                         "AWP_Proj_Name": st.session_state.get("awp_proj_name", None),
                         "Proj_Name": st.session_state.get("proj_name", None),
+                        "Construction_Year": st.session_state.get("construction_year", None),
+                        "New_Continuing": st.session_state.get("new_continuing", None),
+                        "Phase": st.session_state.get("phase", None),
                         "IRIS": st.session_state.get("iris", None),
                         "STIP": st.session_state.get("stip", None),
-                        "Fed_Proj_Num": st.session_state.get("fed_proj_num", None),
-                        "AWP_Proj_Desc": st.session_state.get("awp_proj_desc", None),
-                        "Proj_Desc": st.session_state.get("proj_desc", None),
-                        "Proj_Prac": st.session_state.get("proj_prac", None),
-                        "Phase": st.session_state.get("phase", None),
+                        "Fed_Proj_Num": st.session_state.get("fed_proj_num", None),                     
                         "Fund_Type": st.session_state.get("fund_type", None),
-                        "TenAdd": to_date_string(st.session_state.get("tenadd", None)),
+                        "Proj_Prac": st.session_state.get("proj_prac", None),
+                        "Anticipated_Start": st.session_state.get("anticipated_start", None),
+                        "Anticipated_End": st.session_state.get("anticipated_end", None),
                         "Awarded": "Yes" if st.session_state.get("contractor") else "No",
                         "Award_Date": to_date_string(st.session_state.get("award_date", None)),
                         "Award_Fiscal_Year": st.session_state.get("award_fiscal_year", None),
@@ -371,10 +372,13 @@ def project_payload():
                         "Awarded_Amount": str_to_int(st.session_state.get("awarded_amount", None)),
                         "Current_Contract_Amount": str_to_int(st.session_state.get("current_contract_amount", None)),
                         "Amount_Paid_to_Date": str_to_int(st.session_state.get("amount_paid_to_date", None)),
-                        "Anticipated_Start": st.session_state.get("anticipated_start", None),
-                        "Anticipated_End": st.session_state.get("anticipated_end", None),
-                        "Construction_Year": st.session_state.get("construction_year", None),
-                        "New_Continuing": st.session_state.get("new_continuing", None),
+                        "TenAdd": to_date_string(st.session_state.get("tenadd", None)),
+                        "AWP_Proj_Desc": st.session_state.get("awp_proj_desc", None),
+                        "Proj_Desc": st.session_state.get("proj_desc", None),
+                        "AWP_Contact_Name": st.session_state.get("awp_contact_name", None),
+                        "AWP_Contact_Role": st.session_state.get("awp_contact_role", None),
+                        "AWP_Contact_Email": st.session_state.get("awp_contact_email", None),
+                        "AWP_Contact_Phone": st.session_state.get("awp_contact_phone", None),
                         "Route_ID": st.session_state.get("route_ids", None),
                         "Route_Name": st.session_state.get("route_names", None),
                         "Impact_Comm": st.session_state.get("impact_comm_names", None),
@@ -383,8 +387,6 @@ def project_payload():
                         "Senate_District": st.session_state.get("senate_string", None),
                         "House_District": st.session_state.get("house_string", None),
                         "Proj_Web": st.session_state.get("proj_web", None),
-                        "APEX_Mapper_Link": st.session_state.get("apex_mapper_link", None),
-                        "Email_Signup": st.session_state.get("email_signup", None),
                         'Submitted_By': st.session_state.get('submitted_by', None),
                         "Database_Status": "Review: Awaiting Review",
                         "AWP_GUID": st.session_state.get("awp_globalid", None),
@@ -522,7 +524,6 @@ def geometry_payload(globalid: str):
                         }
                     ]
                 }
-                st.session_state['debug'] = payload
                 payloads.append(clean_payload(payload))
             return payloads
 
@@ -650,40 +651,6 @@ def communities_payload(globalid: str):
         return
 
 
-# =============================================================================
-# PAYLOAD BUILDER: CONTACTS (OPTIONAL)
-# =============================================================================
-def contacts_payload(globalid: str):
-    """
-    Build an ArcGIS applyEdits payload for project contacts.
-
-    Returns:
-        dict | None:
-            - dict: cleaned payload containing one add per contact
-            - None: when no contacts exist in session_state
-    """
-    try:
-        contact_list = st.session_state.get("project_contacts", None)
-        if not contact_list:
-            return None
-
-        payload = {"adds": []}
-
-        # Add contacts to payload
-        for contact in contact_list:
-            payload["adds"].append({
-                "attributes": {
-                    "Contact_Role": contact.get("Role", ""),
-                    "Contact_Name": contact.get("Name", ""),
-                    "Contact_Email": contact.get("Email", ""),
-                    "Contact_Phone": contact.get("Phone", ""),
-                    "parentglobalid": globalid
-                }
-            })
-        return clean_payload(payload)
-    except Exception as e:
-        st.error(f"Error building contacts payload: {e}")
-        return
 
 
 # =============================================================================
@@ -710,29 +677,6 @@ def geography_payload(globalid: str, name: str):
         - Records are fetched from an AGOL reference service via select_record()
         - The returned geometry is passed through directly into the outgoing payload
     """
-    # Dictionary of services keyed by geography name, with base URL and layer index
-    geography_dict = {
-        "region": {
-            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_DOT_PF_Regions/FeatureServer",
-            "layer": 0
-        },
-        "borough": {
-            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_BoroughCensus/FeatureServer",
-            "layer": 0
-        },
-        "senate": {
-            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_SenateDistricts/FeatureServer",
-            "layer": 0
-        },
-        "house": {
-            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/STIP_HouseDistricts/FeatureServer",
-            "layer": 0
-        },
-        "route": {
-            "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOT_Routes_Mileposts/FeatureServer",
-            "layer": 0
-        }
-    }
 
     payload = {}
 
@@ -741,15 +685,20 @@ def geography_payload(globalid: str, name: str):
     # -------------------------------------------------------------------------
     if name == 'region':
         id_list = st.session_state.get(f"{name}_list")
-        service_info = geography_dict.get(name)
-        if not id_list or not service_info:
+        if not id_list:
             print(None)
 
         payload = {"adds": []}
         for item_id in id_list:
             # Query record from AGOL service
-            data = select_record(service_info["url"], service_info["layer"],
-                                 "GlobalID", str(item_id), fields="*", return_geometry=True)
+            data = select_record(
+                url = st.session_state['region_intersect']['url'],
+                layer = st.session_state['region_intersect']['layer'],
+                id_field = "GlobalID", 
+                id_value = str(item_id), 
+                fields="*", 
+                return_geometry=True
+            )
             if not data:
                 continue
             attrs = data[0].get("attributes", {})
@@ -763,19 +712,25 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
+
     # -------------------------------------------------------------------------
     # BOROUGH
     # -------------------------------------------------------------------------
     if name == 'borough':
         id_list = st.session_state.get(f"{name}_list")
-        service_info = geography_dict.get(name)
-        if not id_list or not service_info:
+        if not id_list:
             print(None)
 
         payload = {"adds": []}
         for item_id in id_list:
-            data = select_record(service_info["url"], service_info["layer"],
-                                 "GlobalID", str(item_id), fields="*", return_geometry=True)
+            data = select_record(
+                url = st.session_state['borough_intersect']['url'],
+                layer = st.session_state['borough_intersect']['layer'],
+                id_field = "GlobalID", 
+                id_value = str(item_id), 
+                fields="*", 
+                return_geometry=True
+            )
             if not data:
                 continue
             attrs = data[0].get("attributes", {})
@@ -796,14 +751,19 @@ def geography_payload(globalid: str, name: str):
     # -------------------------------------------------------------------------
     if name == 'senate':
         id_list = st.session_state.get(f"{name}_list")
-        service_info = geography_dict.get(name)
-        if not id_list or not service_info:
+        if not id_list:
             print(None)
 
         payload = {"adds": []}
         for item_id in id_list:
-            data = select_record(service_info["url"], service_info["layer"],
-                                 "GlobalID", str(item_id), fields="*", return_geometry=True)
+            data = select_record(
+                url = st.session_state['senate_intersect']['url'],
+                layer = st.session_state['senate_intersect']['layer'],
+                id_field = "GlobalID", 
+                id_value = str(item_id), 
+                fields="*", 
+                return_geometry=True
+            )
             if not data:
                 continue
             attrs = data[0].get("attributes", {})
@@ -817,19 +777,25 @@ def geography_payload(globalid: str, name: str):
                 "geometry": geom
             })
 
+
     # -------------------------------------------------------------------------
     # HOUSE
     # -------------------------------------------------------------------------
     if name == 'house':
         id_list = st.session_state.get(f"{name}_list")
-        service_info = geography_dict.get(name)
-        if not id_list or not service_info:
+        if not id_list:
             print(None)
 
         payload = {"adds": []}
         for item_id in id_list:
-            data = select_record(service_info["url"], service_info["layer"],
-                                 "GlobalID", str(item_id), fields="*", return_geometry=True)
+            data = select_record(
+                url = st.session_state['house_intersect']['url'],
+                layer = st.session_state['house_intersect']['layer'],
+                id_field = "GlobalID", 
+                id_value = str(item_id), 
+                fields="*", 
+                return_geometry=True
+            )
             if not data:
                 continue
             attrs = data[0].get("attributes", {})
@@ -852,14 +818,19 @@ def geography_payload(globalid: str, name: str):
     # -------------------------------------------------------------------------
     if name == 'route':
         id_list = st.session_state.get(f"{name}_list")
-        service_info = geography_dict.get(name)
-        if not id_list or not service_info:
+        if not id_list:
             print(None)
-
+    
         payload = {"adds": []}
         for item_id in id_list:
-            data = select_record(service_info["url"], service_info["layer"],
-                                 "Route_ID", str(item_id), fields="*", return_geometry=True)
+            data = select_record(
+                url = st.session_state['route_intersect']['url'],
+                layer = st.session_state['route_intersect']['layer'],
+                id_field = "Route_ID", 
+                id_value = str(item_id), 
+                fields="*", 
+                return_geometry=True
+            )
             if not data:
                 continue
             attrs = data[0].get("attributes", {})
@@ -874,6 +845,7 @@ def geography_payload(globalid: str, name: str):
                 },
                 "geometry": geom
             })
+
 
     # Return cleaned payload
     if payload == {}:

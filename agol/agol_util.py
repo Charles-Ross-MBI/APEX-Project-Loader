@@ -1014,9 +1014,11 @@ class AGOLDataLoader:
                     "adds": json.dumps(payload["adds"])
                 }
             )
-
+            
+            
             self.logger.info("Raw response text: %s", resp.text)
             result = resp.json()
+
 
             if "addResults" in result:
                 add_results = result["addResults"]

@@ -68,14 +68,14 @@ from __future__ import annotations
 
 import streamlit as st
 
-from agol_util import AGOLDataLoader, delete_project, format_guid
-from payloads import (
+from agol.agol_util import AGOLDataLoader, delete_project, format_guid
+from agol.agol_payloads import (
     communities_payload,
-    contacts_payload,
     geography_payload,
     geometry_payload,
     project_payload,
 )
+
 
 # =============================================================================
 # ENTRYPOINT: PROJECT + RELATED DATASETS UPLOAD
@@ -251,47 +251,9 @@ def load_project_apex() -> None:
                 load_communities.get("message")
             )
 
-    # -------------------------------------------------------------------------
-    # STEP 4: UPLOAD CONTACTS (OPTIONAL)
-    # -------------------------------------------------------------------------
-    # Notes:
-    #   contacts_payload() may return None when no contact records exist.
-    #   This step is skipped rather than treated as a failure.
-    # -------------------------------------------------------------------------
-    with spinner_container, st.spinner("Loading Contacts to APEX..."):
-        try:
-            payload_contacts = contacts_payload(
-                st.session_state.get("apex_globalid")
-            )
-            contacts_layer = st.session_state["contacts_layer"]
-            if payload_contacts is None:
-                load_contacts = None
-            else:
-                load_contacts = AGOLDataLoader(
-                    url=st.session_state["apex_url"],
-                    layer=contacts_layer,
-                ).add_features(payload_contacts)
-        except Exception as e:
-            load_contacts = {
-                "success": False,
-                "message": f"Contacts payload error: {e}",
-            }
-    spinner_container.empty()
-
-    if load_contacts is not None:
-        if load_contacts.get("success"):
-            st.success("LOAD CONTACTS: SUCCESS ✅")
-        else:
-            st.error(
-                "LOAD CONTACTS: FAILURE ❌ "
-                f"{load_contacts.get('message')}"
-            )
-            st.session_state.setdefault("step_failures", []).append(
-                load_contacts.get("message")
-            )
 
     # -------------------------------------------------------------------------
-    # STEP 5: UPLOAD GEOGRAPHY (OPTIONAL; GATED BY SESSION_STATE LIST PRESENCE)
+    # STEP 4: UPLOAD GEOGRAPHY (OPTIONAL; GATED BY SESSION_STATE LIST PRESENCE)
     # -------------------------------------------------------------------------
     # Mechanism:
     #   - geography_layers maps logical geography names to AGOL layer IDs
@@ -315,6 +277,7 @@ def load_project_apex() -> None:
         # Add impacted routes only when route or boundary is selected.
         if st.session_state["selected_route"] or st.session_state["selected_boundary"]:
             geography_layers["route"] = st.session_state["impact_routes_layer"]
+
 
         load_results = {}
         try:
