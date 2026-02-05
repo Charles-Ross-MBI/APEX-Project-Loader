@@ -393,8 +393,8 @@ def project_payload():
                         "AWP_Update": st.session_state.get("awp_update", None)
                     },
                     "geometry": {
-                        "x": center[1] if center else None,  # longitude
-                        "y": center[0] if center else None,  # latitude
+                        "x": center[0] if center else None,  # longitude
+                        "y": center[1] if center else None,  # latitude
                         "spatialReference": {"wkid": 4326}
                     }
                 }
