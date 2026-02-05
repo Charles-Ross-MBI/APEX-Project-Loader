@@ -110,10 +110,7 @@ def impacted_comms_select(is_awp: bool = False):
     value_key = f"{src}_impact_comm"
 
     # Data source for communities (ArcGIS FeatureServer)
-    comms_url = (
-        "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/"
-        "All_Alaska_Communities_Baker/FeatureServer"
-    )
+    comms_url = st.session_state['communities']
     comms_list = get_multiple_fields(comms_url, 7, ["OverallName", "DCCED_CommunityId"]) or []
 
     # Build lookups:

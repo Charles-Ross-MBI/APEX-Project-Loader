@@ -44,7 +44,7 @@ def review_information():
 
 
     # --- Map of Location ---
-    header_with_edit("PROJECT LOCATION", target_step=4, help="Edit Project Loaction")
+    header_with_edit("PROJECT LOCATION", target_step=3, help="Edit Project Loaction")
     
     
     if "selected_point" in st.session_state and st.session_state["selected_point"]:

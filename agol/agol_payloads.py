@@ -606,10 +606,7 @@ def communities_payload(globalid: str):
             return None
 
         payload = {"adds": []}
-        comms_url = (
-            "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/"
-            "All_Alaska_Communities_Baker/FeatureServer"
-        )
+        comms_url = st.session_state['communities']
 
         for comm_id in comm_list:
             comms_data = select_record(
