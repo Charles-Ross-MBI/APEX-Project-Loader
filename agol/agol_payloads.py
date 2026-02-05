@@ -400,7 +400,6 @@ def project_payload():
                 }
             ]
         }
-        st.session_state['debug'] = payload
         return clean_payload(payload)
     except Exception as e:
         # Bubble up error so caller can handle with st.error

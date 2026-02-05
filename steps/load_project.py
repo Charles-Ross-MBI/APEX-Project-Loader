@@ -361,5 +361,3 @@ def load_project_apex() -> None:
             """,
             unsafe_allow_html=True,
         )
-
-        st.markdown(st.session_state['debug'])
