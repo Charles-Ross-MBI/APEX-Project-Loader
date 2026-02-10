@@ -101,6 +101,13 @@ def init_session_state():
         "project_category": None,
         "details_complete": False,
         "duplicate_confirmed": False,
+        "awp_geometry_points": {},
+        "awp_dcml_mid_latitude": None,
+        "awp_dcml_mid_longitude": None,
+        "awp_dcml_bop_latitude": None,
+        "awp_dcml_bop_longitude": None,
+        "awp_dcml_eop_latitude": None,
+        "awp_dcml_eop_longitude": None,
     }
 
     # Seed missing keys (do not overwrite user/session modifications)
@@ -207,13 +214,18 @@ def init_session_state():
     # -------------------------------------------------------------------------
     # AGOL URLS
     # -------------------------------------------------------------------------
-    # Convenience per-layer URLs (FeatureServer/{layer})
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_a7d9cb6cb1ac430484613484afde8cb6/FeatureServer",
-        "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_PROJECTS_EXPORT_XYTableToPoint_ExportFeatures/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_430b95b74403411c80494695f7825b65/FeatureServer",
+        "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
     }
+
+    aashtoware_layers = {
+        'contracts_layer': 0,
+        'geometry_layer': 1,
+    }
+
 
     # Layer indices used by loaders and query helpers
     apex_layers = {
@@ -226,7 +238,10 @@ def init_session_state():
         "bor_layer": 6,
         "senate_layer": 7,
         "house_layer": 8,
-        "impact_routes_layer": 9
+        "impact_routes_layer": 9,
+        "traffic_impacts": 10,
+        "start_points": 11,
+        "end_points": 12
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
@@ -254,9 +269,11 @@ def init_session_state():
     }
 
     # Seed layer indices and URLs into session_state
+    for key, value in agol_urls.items():
+        st.session_state.setdefault(key, value)
     for key, value in apex_layers.items():
         st.session_state.setdefault(key, value)
-    for key, value in agol_urls.items():
+    for key, value in aashtoware_layers.items():
         st.session_state.setdefault(key, value)
     for key, value in geography_intersects.items():
         st.session_state.setdefault(key, value)
@@ -296,28 +313,43 @@ def init_session_state():
     # AWP_FIELDS provides a single place to map UI/session keys to the
     # AASHTOWare-provided session keys.
     AWP_FIELDS = {
-        "awp_proj_name": "awp_proj_name",
-        "proj_name": "awp_public_proj_name",
-        "phase": "awp_project_workflowphaseid",
-        "fed_proj_num": "awp_fed_proj_num",
-        "iris": "awp_iris_number",
-        "stip": "awp_stip",
-        "fund_type": "awp_funding_type",
-        "proj_prac": "awp_project_practice",
-        "contractor": "awp_contractor",
-        "anticipated_start": "awp_anticipated_construction_begin",
-        "anticipated_end": "awp_anticipated_construction_end",
-        "award_date": "awp_award_date",
-        "award_fiscalyear": "awp_awardfederalfiscalyear",
-        "awarded_amount": "awp_proposal_awardedamount",
-        "current_contract_amount": "awp_contract_currentcontractamount",
-        "amount_paid_to_date": "awp_contract_amountpaidtodate",
-        "tenadd": "awp_tentative_advertising_date",
-        "awp_proj_desc": "awp_project_description",
-        "proj_desc": "awp_public_desc",
-        "proj_web": "awp_proj_web",
+        "awp_proj_name": "ProjectName",
+        "proj_name": "awp_PublicProjectName",
+        "phase": "awp_ProjectPhase",
+        "iris": "IRIS",
+        "stip": "",
+        "fed_proj_num": "FederalProjectNumber",
+        "fund_type": "FundingType",
+        "proj_prac": "ProjectPractice",
+        "anticipated_start": "StartDate",
+        "anticipated_end": "EndDate",
+        "award_date": "AwardDate",
+        "award_fiscal_year": "AwardFederalFiscalYear",
+        "contractor": "AwardedContractor",
+        "awarded_amount": "AwardedContractAmount",
+        "current_contract_amount": "",
+        "amount_paid_to_date": "AmountPaidToDate",
+        "tenadd": "TentativeAdvertisingDate",
+        "awp_proj_desc": "AASTOWARE_Description",
+        "awp_contact_name":"ContactName",
+        "awp_contact_email":"ContactEmail",
+        "awp_contact_phone":"ContactPhone",
+        "proj_desc": "PublicDescription",
+        "proj_web": "ProjectURL",
     }
-    st.session_state['awp_fields'] = AWP_FIELDS
+
+   # Build transformed dict in session_state
+    st.session_state["awp_fields"] = {}
+
+    for key, value in AWP_FIELDS.items():
+        if not value:
+            # keep blanks as blank
+            st.session_state["awp_fields"][key] = ""
+        else:
+            v = value.strip().lower()
+            if not v.startswith("awp_"):
+                v = "awp_" + v
+            st.session_state["awp_fields"][key] = v
 
     # ======================================================
     # DATA UPLOADERS

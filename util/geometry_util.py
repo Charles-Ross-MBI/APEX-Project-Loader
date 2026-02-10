@@ -83,7 +83,8 @@ from util.map_util import (
 )
 
 # Data helpers (milepoint entry)
-from agol.agol_util import get_unique_field_values, get_route_segment
+from agol.agol_util import get_unique_field_values, AGOLRouteSegmentFinder
+
 
 
 
@@ -778,9 +779,9 @@ def enter_milepoints():
     st.write("")
     
     # ---------------------------------------------------------
-    # Get geometry path from AGOL
+    # Get geometry path from AGOL (UPDATE WITH FUNCTIONALITY)
     # ---------------------------------------------------------
-    geometry_path = get_route_segment(route_name, from_mp, to_mp) or []
+    geometry_path = None
     st.session_state.milepoints_geometry_buffer = geometry_path
 
 
@@ -1156,8 +1157,7 @@ def polygon_shapefile():
 # This helper displays and confirms AASHTOWare-provided coordinates. It also
 # writes a canonical selected_point into session_state for downstream flows.
 # =============================================================================
-
-def aashtoware_point(lat: float, lon: float):
+def aashtoware_point(mid_lat: float, mid_lon: float):
     """
     Display AASHTOWare-provided coordinates and persist them as a point selection.
 
@@ -1188,33 +1188,221 @@ def aashtoware_point(lat: float, lon: float):
         ro_widget(
             key="awp_lat",
             label="Latitude",
-            value=lat,
+            value=mid_lat,
         )
     with cols[1]:
         ro_widget(
             key="awp_lng",
             label="Longitude",
-            value=lon
+            value=mid_lon
         )
 
+    coords = [[round(float(mid_lat), 6), round(float(mid_lon), 6)]]
+    bounds = set_bounds_point(coords)
+
     # Create map centered on the coordinates
-    m = folium.Map(location=[lat, lon], zoom_start=10)
+    m = folium.Map(location=[mid_lat, mid_lon])
+    m.fit_bounds(bounds)
     folium.Marker(
-        [lat, lon],
+        [mid_lat, mid_lon],
         icon=folium.Icon(color="blue"),
         tooltip="Uploaded Point"
     ).add_to(m)
-    add_small_geocoder(m)
     st_folium(m, width=700, height=500)
+    
 
     # ✅ Update session_state if valid point
-    if lat and lon:
+    if mid_lat and mid_lon:
         try:
-            st.session_state["selected_point"] = [[round(float(lat), 6), round(float(lon), 6)]]
+            st.session_state["selected_point"] = [[round(float(mid_lat), 6), round(float(mid_lon), 6)]]
         except Exception:
             st.session_state["selected_point"] = None
 
 
 
-def aashtoware_path(mp: float, ep: float):
-    pass
+
+
+def aashtoware_path(bop_lat: float, bop_lon: float, eop_lat: float, eop_lon: float) -> None:
+    """
+    Draw-only route map with BOP/EOP markers.
+    - Drawn polyline is buffered (not processed) until LOAD is pressed.
+    - CLEAR wipes buffer, route selection, and map widgets.
+    """
+
+    st.write("")
+    st.markdown("###### AASHTOWare BOP/EOP Coordinates", unsafe_allow_html=True)
+    st.write(
+        "The coordinates below reflect the project’s begin and end locations in the AASHTOWare database. "
+        "Draw the project route on the map (polyline only). Click **LOAD** to process."
+    )
+    st.write("")
+
+    # --- Read-only BOP / EOP inputs ---
+    cols_bop = st.columns(2)
+    with cols_bop[0]:
+        ro_widget(key="awp_bop_lat", label="Beginning of Project (BOP) Latitude", value=bop_lat)
+    with cols_bop[1]:
+        ro_widget(key="awp_bop_lng", label="Beginning of Project (BOP) Longitude", value=bop_lon)
+
+    st.write("")
+
+    cols_eop = st.columns(2)
+    with cols_eop[0]:
+        ro_widget(key="awp_eop_lat", label="End of Project (EOP) Latitude", value=eop_lat)
+    with cols_eop[1]:
+        ro_widget(key="awp_eop_lng", label="End of Project (EOP) Longitude", value=eop_lon)
+
+    st.write("")
+
+    # ------------------------------
+    # Initialize session state keys
+    # ------------------------------
+    ss = st.session_state
+    if "milepoints_geometry_buffer" not in ss:
+        ss.milepoints_geometry_buffer = []
+    if "selected_route" not in ss:
+        ss["selected_route"] = None
+    if "milepoints_widget_reset" not in ss:
+        ss.milepoints_widget_reset = 0
+    if "milepoints_map_reset" not in ss:
+        ss.milepoints_map_reset = 0
+    if "mp_route_name" not in ss:
+        ss.mp_route_name = None
+    if "mp_from_mp" not in ss:
+        ss.mp_from_mp = None
+    if "mp_to_mp" not in ss:
+        ss.mp_to_mp = None
+
+    try:
+        # Convert and round
+        bl_lat = round(float(bop_lat), 6)
+        bl_lon = round(float(bop_lon), 6)
+        el_lat = round(float(eop_lat), 6)
+        el_lon = round(float(eop_lon), 6)
+
+        center_lat = (bl_lat + el_lat) / 2
+        center_lon = (bl_lon + el_lon) / 2
+
+        # ---- Build map ----
+        m = folium.Map(location=[center_lat, center_lon], zoom_start=10, control_scale=True)
+
+        # Add BOP/EOP markers (always visible)
+        folium.Marker(
+            [bl_lat, bl_lon],
+            tooltip="BOP",
+            icon=folium.Icon(color="green", icon="info-sign"),
+        ).add_to(m)
+
+        folium.Marker(
+            [el_lat, el_lon],
+            tooltip="EOP",
+            icon=folium.Icon(color="red", icon="info-sign"),
+        ).add_to(m)
+
+        # ---- Draw control: only allow polylines ----
+        Draw(
+            export=False,
+            position="topleft",
+            draw_options={
+                "polyline": True,
+                "polygon": False,
+                "rectangle": False,
+                "circle": False,
+                "circlemarker": False,
+                "marker": False,
+            },
+            edit_options={"edit": True, "remove": True},
+        ).add_to(m)
+
+        # Initial bounds to BOP/EOP (simple, reliable)
+        m.fit_bounds([[bl_lat, bl_lon], [el_lat, el_lon]])
+
+        # Render map and capture draw events
+        map_event = st_folium(
+            m,
+            width=750,
+            height=520,
+            returned_objects=["last_active_drawing", "all_drawings"]
+        )
+
+        # ---- Helper: extract the most relevant polyline from the event ----
+        def _extract_polyline(event):
+            if not event:
+                return None
+
+            # Prefer last_active_drawing if a LineString
+            lad = event.get("last_active_drawing")
+            if lad and isinstance(lad, dict):
+                geom = lad.get("geometry")
+                if geom and geom.get("type") == "LineString":
+                    coords = geom.get("coordinates", [])
+                    # GeoJSON coords are [lon, lat]; convert to [lat, lon]
+                    latlngs = [[round(c[1], 6), round(c[0], 6)] for c in coords if isinstance(c, (list, tuple)) and len(c) >= 2]
+                    return latlngs if len(latlngs) >= 2 else None
+
+            # Fallback: scan all_drawings from most recent back
+            all_drawings = event.get("all_drawings")
+            if isinstance(all_drawings, list):
+                for feat in reversed(all_drawings):
+                    geom = feat.get("geometry") if isinstance(feat, dict) else None
+                    if geom and geom.get("type") == "LineString":
+                        coords = geom.get("coordinates", [])
+                        latlngs = [[round(c[1], 6), round(c[0], 6)] for c in coords if isinstance(c, (list, tuple)) and len(c) >= 2]
+                        if len(latlngs) >= 2:
+                            return latlngs
+
+            return None
+
+        # Stage drawn geometry to the buffer, but do NOT process yet
+        drawn_path = _extract_polyline(map_event)
+        if drawn_path and len(drawn_path) >= 2:
+            # Keep only the latest polyline in buffer (enforce single route)
+            ss.milepoints_geometry_buffer = drawn_path
+        else:
+            # If the user removed the drawing, clear the buffer
+            if map_event and map_event.get("all_drawings") == []:
+                ss.milepoints_geometry_buffer = []
+
+        # ---------------------------------------------------------
+        # LOAD + CLEAR buttons (directly under the map)
+        # ---------------------------------------------------------
+        def _clear_milepoints_tool_state():
+            """
+            Full clear: preview + saved geometry + all widget selections.
+            """
+            ss.milepoints_geometry_buffer = []
+            ss["selected_route"] = None
+
+            ss.mp_route_name = None
+            ss.mp_from_mp = None
+            ss.mp_to_mp = None
+
+            ss.milepoints_widget_reset += 1
+            ss.milepoints_map_reset += 1
+
+        bottom = st.container()
+        with bottom:
+            c1, c2 = st.columns([1, 1])
+
+            # LOAD
+            with c1:
+                if st.button("LOAD", use_container_width=True, type="primary"):
+                    if ss.milepoints_geometry_buffer:
+                        # Persist the buffered geometry as the selected route
+                        # (shape: list of [lat, lon])
+                        ss["selected_route"] = [list(ss.milepoints_geometry_buffer)]
+            
+                    else:
+                        st.info("No geometry to load.")
+
+            # CLEAR
+            with c2:
+                if st.button("CLEAR", use_container_width=True):
+                    _clear_milepoints_tool_state()
+                    st.rerun()
+
+        st.markdown("", unsafe_allow_html=True)
+
+    except Exception:
+        # On any error, do not process; just clear selected_route
+        st.session_state["selected_route"] = None

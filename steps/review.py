@@ -225,7 +225,6 @@ def review_information():
     # Contact
     with st.expander("Contact", expanded=True):
         st.markdown(f"**Name:** {st.session_state.get('awp_contact_name','—')}")
-        st.markdown(f"**Role:** {st.session_state.get('awp_contact_role','—')}")
         col1, col2 = st.columns(2)
         with col1:
             st.markdown(f"**Email:** {st.session_state.get('awp_contact_email','—')}")
@@ -263,6 +262,4 @@ def review_information():
         st.markdown(f"**Communities:** {impact_comm_display}")
 
     
-
-    st.write("")
     st.write("")

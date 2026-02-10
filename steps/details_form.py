@@ -19,7 +19,7 @@ Key behaviors:
 
 import streamlit as st
 import datetime
-from agol.agol_util import get_multiple_fields, select_record
+from agol.agol_util import get_multiple_fields, select_record, aashtoware_geometry
 from util.read_only_util import ro_widget
 from util.input_util import (
     fmt_currency, 
@@ -28,7 +28,7 @@ from util.input_util import (
     fmt_int, 
     fmt_int_or_none, 
     fmt_string,
-    year_to_mmddyyyy,
+    fmt_agol_date,
     widget_key
 )
 
@@ -174,24 +174,55 @@ def impacted_comms_select(is_awp: bool = False):
 # - on_change callback updates ONLY selection state (record loading is handled elsewhere)
 # =============================================================================
 def aashtoware_project():
+    # ---------------------------------------------------------------------
+    # Helper: format ConstructionYears for display
+    #   None / ""      -> ""
+    #   "CY2024,CY2025"-> "[CY2024, CY2025]"
+    #   ["CY2024", ...]-> "[CY2024, ...]"
+    # ---------------------------------------------------------------------
+    def _format_construction_years(cy):
+        if not cy:
+            return ""
+        if isinstance(cy, (list, tuple, set)):
+            parts = [str(x).strip() for x in cy if x and str(x).strip()]
+        else:
+            parts = [p.strip() for p in str(cy).split(",") if p.strip()]
+        return f"{', '.join(parts)}" if parts else ""
+
     aashtoware = st.session_state["aashtoware_url"]
 
     # -------------------------------------------------------------------------
-    # Build mappings (label <-> GlobalID)
+    # Pull projects (same data pull you referenced)
     # -------------------------------------------------------------------------
-    # labels are user-facing (StateProjectNumber – Name)
-    # gids are the authoritative record identifiers used for lookups
     projects = get_multiple_fields(
-        aashtoware, 0, ["Name", "ProposalId", "StateProjectNumber", "GlobalID"]
-    )
-    label_to_gid = {
-        f"{p.get('StateProjectNumber', '')} – {p.get('Name', '')}": p.get("GlobalID")
+        aashtoware,
+        st.session_state["contracts_layer"],
+        ["ProjectName", "IRIS", "ConstructionYears", "GlobalID"]
+    ) or []
+
+    # NEW: lookup for existing ConstructionYears by GlobalID (from same pull)
+    gid_to_cy = {
+        p.get("GlobalID"): _format_construction_years(p.get("ConstructionYears"))
         for p in projects
         if p.get("GlobalID")
     }
+
+    
+    # Sort projects by ProjectName (case-insensitive), blank names go last
+    projects_sorted = sorted(
+        (p for p in projects if p.get("GlobalID")),
+        key=lambda p: ((p.get("ProjectName") or "").strip().lower() == "", (p.get("ProjectName") or "").strip().lower())
+    )
+
+    label_to_gid = {
+        f"{p.get('IRIS', '')} – {p.get('ProjectName', '')}": p.get("GlobalID")
+        for p in projects_sorted
+    }
+
     gid_to_label = {gid: label for label, gid in label_to_gid.items()}
     placeholder_label = "— Select a project —"
-    labels = [placeholder_label] + sorted(label_to_gid.keys())
+    labels = [placeholder_label] + list(label_to_gid.keys())  # already sorted by ProjectName
+
 
     # -------------------------------------------------------------------------
     # Widget key management (versioned keys prevent Streamlit state bleed)
@@ -206,43 +237,44 @@ def aashtoware_project():
     active_label = gid_to_label.get(active_gid) if active_gid else None
 
     if active_gid and active_label:
-        # canonical selection state
         st.session_state["aashto_id"] = active_gid
         st.session_state["aashto_label"] = active_label
         st.session_state["aashto_selected_project"] = active_label
 
+        # NEW: also seed the construction years display when restoring
+        st.session_state["awp_selected_construction_years"] = gid_to_cy.get(active_gid, "")
+
     # ------------------------------------------------------------
     # 2) Seed widget display value WITHOUT using index=
-    #    (prevents "default value AND Session State" warning)
     # ------------------------------------------------------------
-    # Decide what the selectbox should show
     desired_label = st.session_state.get(widget_key)
 
     if desired_label not in labels:
-        # Prefer canonical label if valid
         desired_label = st.session_state.get("aashto_label")
     if desired_label not in labels:
-        # Then try label resolved from active GUID
         desired_label = active_label
     if desired_label not in labels:
-        # Finally fall back to placeholder
         desired_label = placeholder_label
 
-    # Seed widget state only if missing/invalid
     if st.session_state.get(widget_key) not in labels:
         st.session_state[widget_key] = desired_label
 
     # ------------------------------------------------------------
     # 3) Callback: ONLY update selection state
+    #    + NEW: update read-only ConstructionYears display
     # ------------------------------------------------------------
     def _on_project_change():
         selected_label = st.session_state[widget_key]
+
         if selected_label == placeholder_label:
             st.session_state["aashto_label"] = None
             st.session_state["aashto_id"] = None
             st.session_state["aashto_selected_project"] = None
             st.session_state["awp_guid"] = None
             st.session_state["awp_update"] = "No"
+
+            # NEW: clear the display field
+            st.session_state["awp_selected_construction_years"] = ""
             return
 
         selected_gid = label_to_gid.get(selected_label)
@@ -251,6 +283,9 @@ def aashtoware_project():
         st.session_state["aashto_selected_project"] = selected_label
         st.session_state["awp_guid"] = selected_gid
         st.session_state["awp_update"] = "Yes"
+
+        # NEW: set the display field from the same data pull
+        st.session_state["awp_selected_construction_years"] = gid_to_cy.get(selected_gid, "")
 
     # Render widget (NO index= here)
     st.selectbox(
@@ -261,16 +296,30 @@ def aashtoware_project():
     )
 
     # -------------------------------------------------------------------------
-    # 4) LOAD FORM WHEN GUID CHANGES (works for user OR programmatic)
+    # NEW: Ensure display value is populated on programmatic restores / reruns
     # -------------------------------------------------------------------------
-    # Pattern:
-    #   - Only load when selected gid changes (guard with awp_last_loaded_gid)
-    #   - Clear user-entered keys so UI-mode content doesn't persist into AWP mode
-    #   - Write returned attributes into "awp_{lowercase_field}" session keys
     selected_gid = st.session_state.get("aashto_id")
+    if selected_gid and st.session_state.get("awp_selected_construction_years") is None:
+        st.session_state["awp_selected_construction_years"] = gid_to_cy.get(selected_gid, "")
+    elif selected_gid and not st.session_state.get("awp_selected_construction_years"):
+        # If empty string, keep it (means no years). If missing key, repopulate.
+        st.session_state["awp_selected_construction_years"] = gid_to_cy.get(selected_gid, "")
+
+    # -------------------------------------------------------------------------
+    # NEW: Read-only display ABOVE the project form (right after selectbox)
+    # -------------------------------------------------------------------------
+    ro_widget(
+        key="awp_selected_construction_years",
+        label="Existing Construction Year(s) in APEX",
+        value=fmt_string(st.session_state.get("awp_selected_construction_years", "")),
+    )
+    st.write("")  # spacer
+
+    # -------------------------------------------------------------------------
+    # 4) LOAD FORM WHEN GUID CHANGES (UNCHANGED)
+    # -------------------------------------------------------------------------
     last_loaded = st.session_state.get("awp_last_loaded_gid")
     if selected_gid and selected_gid != last_loaded:
-        # Clear user-entered fields (UI mode keys)
         user_keys = [
             "construction_year",
             "phase",
@@ -309,13 +358,12 @@ def aashtoware_project():
         if record and "attributes" in record[0]:
             attrs = record[0]["attributes"]
             for k, v in attrs.items():
-                st.session_state[f"awp_{k.lower()}"] = v
+                st.session_state[f"awp_{k}".lower()] = v
 
-        # Mark loaded guid so we don't reload every rerun
         st.session_state["awp_last_loaded_gid"] = selected_gid
         st.session_state["awp_selection_changed"] = True
 
-        # Reset All Constrcution Year Defaults
+        # Reset All Construction Year Defaults
         for k in [k for k in st.session_state if k.startswith("awp_widget_key_construction_year_")]:
             st.session_state[k] = None
 
@@ -542,6 +590,8 @@ def _render_original_form(is_awp: bool):
     # =============================================================================
     with st.form(form_key):
 
+        AWP_FIELDS = st.session_state['awp_fields']
+
         # ---------------------------------------------------------------------
         # SECTION 1: PROJECT NAME
         # ---------------------------------------------------------------------
@@ -553,13 +603,13 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="awp_proj_name",
                     label="AASHTOWare Project Name",
-                    value=fmt_string(val("awp_name")),
+                    value=fmt_string(val(AWP_FIELDS['awp_proj_name'])),
                 )
             with c2:
                 ro_widget(
                     key="proj_name",
                     label="Public Project Name",
-                    value=fmt_string(val("awp_name")),
+                    value=fmt_string(val(AWP_FIELDS['proj_name'])),
                 )
         else:
             # UI mode: editable public project name
@@ -580,32 +630,52 @@ def _render_original_form(is_awp: bool):
         # Subsection 2A: Construction Year + Phase
         col1, col2 = st.columns(2)
         with col1:
-            options = st.session_state["construction_years"]
+            # All available options (already strings like "CY2025")
+            options = [str(o) if o is not None else "" for o in st.session_state["construction_years"]]
 
-            # Saved value (from session_state or snapshot preload)
+            # Saved value
             saved = st.session_state.get("construction_year", "")
+            saved_str = str(saved) if saved is not None else ""
 
-            # Normalize types so matching works reliably
-            options_str = [str(o) if o is not None else "" for o in options]
-            saved_str = "" if saved is None else str(saved)
+            # Already-used construction years (string or comma-separated string or list)
+            existing_raw = st.session_state.get("awp_selected_construction_years", "")
 
-            # If nothing saved, pick blank option if present; otherwise index 0
-            idx = options_str.index(saved_str) if saved_str in options_str else options_str.index("") if "" in options_str else 0
+            # Normalize existing values to a set of strings
+            if isinstance(existing_raw, str):
+                existing = {v.strip() for v in existing_raw.split(",") if v.strip()}
+            elif isinstance(existing_raw, (list, tuple, set)):
+                existing = {str(v).strip() for v in existing_raw}
+            else:
+                existing = set()
+
+            # --- SIMPLE FILTER: remove any option already in existing years ---
+            filtered_options = [opt for opt in options if opt not in existing]
+
+            # Safety: ensure at least one choice exists
+            if not filtered_options:
+                filtered_options = [""]
+
+            # Pick index safely
+            if saved_str in filtered_options:
+                idx = filtered_options.index(saved_str)
+            elif "" in filtered_options:
+                idx = filtered_options.index("")
+            else:
+                idx = 0
 
             st.session_state["construction_year"] = st.selectbox(
                 "Construction Year ⮜",
-                options_str,
+                filtered_options,
                 index=idx,
                 key=widget_key("construction_year", version, is_awp),
                 help="The project’s assigned year. Continuing projects must also receive a new year.",
             )
-
         if is_awp:
             with col2:
                 ro_widget(
                     key="phase",
                     label="Phase",
-                    value=fmt_string(val("awp_project_workflowphaseid")),
+                    value=fmt_string(val(AWP_FIELDS['phase'])),
                 )
         else:
             with col2:
@@ -624,19 +694,19 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="iris",
                     label="IRIS",
-                    value=fmt_string(val("awp_iris_number")),
+                    value=fmt_string(val(AWP_FIELDS['iris'])),
                 )
             with col6:
                 ro_widget(
                     key="stip",
                     label="STIP",
-                    value=fmt_string(val("awp_stip_number")),
+                    value=fmt_string(val(AWP_FIELDS['stip'])),
                 )
             with col7:
                 ro_widget(
                     key="fed_proj_num",
                     label="Federal Project Number",
-                    value=fmt_string(val("awp_fed_proj_number")),
+                    value=fmt_string(val(AWP_FIELDS['fed_proj_num'])),
                 )
         else:
             col5, col6, col7 = st.columns(3)
@@ -672,13 +742,13 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="fund_type",
                     label="Funding Type",
-                    value=fmt_string(val("awp_funding_type")),
+                    value=fmt_string(val(AWP_FIELDS['fund_type'])),
                 )
             with col14:
                 ro_widget(
                     key="proj_prac",
                     label="Project Practice",
-                    value=fmt_string(val("awp_project_practice")),
+                    value=fmt_string(val(AWP_FIELDS['proj_prac'])),
                 )
         else:
             col13, col14 = st.columns(2)
@@ -713,13 +783,13 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="anticipated_start",
                     label="Anticipated Start",
-                    value=year_to_mmddyyyy(val("awp_anticipated_construction_begin")),
+                    value=fmt_date(val(AWP_FIELDS['anticipated_start'])),
                 )
             with col11:
                 ro_widget(
                     key="anticipated_end",
                     label="Anticipated End",
-                    value=year_to_mmddyyyy(val("awp_anticipated_construction_end")),
+                    value=fmt_date(val(AWP_FIELDS['anticipated_end'])),
                 )
         else:
             col10, col11 = st.columns(2)
@@ -755,13 +825,13 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="award_date",
                     label="Award Date",
-                    value=fmt_date(val("awp_award_date")),
+                    value=fmt_agol_date(val(AWP_FIELDS['award_date'])),
                 )
             with col13:
                 ro_widget(
                     key="award_fiscal_year",
                     label="Awarded Fiscal Year",
-                    value=fmt_int(val("awp_awardfederalfiscalyear"), year=True),
+                    value=fmt_int(val(AWP_FIELDS['award_fiscal_year']), year=True),
                 )
         else:
             col12, col13 = st.columns(2)
@@ -788,7 +858,7 @@ def _render_original_form(is_awp: bool):
             ro_widget(
                 key="contractor",
                 label="Awarded Contractor",
-                value=fmt_string(val("awp_contractor")),
+                value=fmt_string(val(AWP_FIELDS['contractor'])),
             )
         else:
             st.session_state["contractor"] = st.text_input(
@@ -805,19 +875,19 @@ def _render_original_form(is_awp: bool):
                 ro_widget(
                     key="awarded_amount",
                     label="Awarded Amount",
-                    value=fmt_currency(val("awp_proposal_awardedamount")),
+                    value=fmt_currency(val(AWP_FIELDS['awarded_amount'])),
                 )
             with col16:
                 ro_widget(
                     key="current_contract_amount",
                     label="Current Contract Amount",
-                    value=fmt_currency(val("awp_contract_currentcontractamount")),
+                    value=fmt_currency(val(AWP_FIELDS['current_contract_amount'])),
                 )
             with col17:
                 ro_widget(
                     key="amount_paid_to_date",
                     label="Amount Paid to Date",
-                    value=fmt_currency(val("awp_contract_amountpaidtodate")),
+                    value=fmt_currency(val(AWP_FIELDS['amount_paid_to_date'])),
                 )
         else:
             col15, col16, col17 = st.columns(3)
@@ -848,7 +918,7 @@ def _render_original_form(is_awp: bool):
             ro_widget(
                 key="tenadd",
                 label="Tentative Advertise Date",
-                value=fmt_date(val("awp_tentative_advertising_date")),
+                value=fmt_date(val(AWP_FIELDS['tenadd'])),
             )
         else:
             st.session_state["tenadd"] = st.date_input(
@@ -872,13 +942,13 @@ def _render_original_form(is_awp: bool):
             ro_widget(
                 key="awp_proj_desc",
                 label="AASHTOWare Description",
-                value=fmt_string(val("awp_project_description")),
+                value=fmt_string(val(AWP_FIELDS['awp_proj_desc'])),
                 textarea=True
             )
             ro_widget(
                 key="proj_desc",
                 label="Public Description",
-                value=fmt_string(val("awp_public_project_description")),
+                value=fmt_string(val(AWP_FIELDS['proj_desc'])),
                 textarea=True
             )
         else:
@@ -903,39 +973,27 @@ def _render_original_form(is_awp: bool):
             ro_widget(
                 key="awp_contact_name",
                 label="Contact",
-                value=fmt_string(val("awp_contact_name"))
+                value=fmt_string(val(AWP_FIELDS['awp_contact_name']))
             )
-            ro_widget(
-                key="awp_contact_role",
-                label="Role",
-                value=fmt_string(val("awp_contact_role"))
-            )
-
             col18, col19 = st.columns(2)
             with col18:
                 ro_widget(
                     key="awp_contact_email",
                     label="Email",
-                    value=fmt_string(val("awp_contact_email"))
+                    value=fmt_string(val(AWP_FIELDS['awp_contact_email']))
                 )
             with col19:
                 ro_widget(
                     key="awp_contact_phone",
                     label="Phone",
-                    value=fmt_string(val("awp_contact_phone"))
+                    value=fmt_string(val(AWP_FIELDS['awp_contact_phone']))
                 )
         else:
             st.session_state["awp_contact_name"] = st.text_input(
-                label="Project Website",
+                label="Name",
                 key=widget_key("awp_contact_name", version, is_awp),
                 value=st.session_state.get("awp_sel_contact_name", ''),
             )
-            st.session_state["awp_contact_role"] = st.text_input(
-                label="APEX Mapper",
-                key=widget_key("awp_contact_role", version, is_awp),
-                value=st.session_state.get("awp_sel_contact_role", ''),
-            )
-
             col18, col19 = st.columns(2)
             with col18:
                 st.session_state["awp_contact_email"] = st.text_input(
@@ -961,7 +1019,7 @@ def _render_original_form(is_awp: bool):
             ro_widget(
                 key="proj_web",
                 label="Project Website",
-                value=fmt_string(val("awp_proj_web"))
+                value=fmt_string(val(AWP_FIELDS['proj_web']))
             )
             
         else:
@@ -988,7 +1046,7 @@ def _render_original_form(is_awp: bool):
         submit_button = st.form_submit_button("SUBMIT INFORMATION", use_container_width=True)
 
         if submit_button:
-        
+            
             # Required field rules differ by mode:
             # - AWP: requires Construction Year only
             # - UI : requires Construction Year, Public Project Name, Public Description
@@ -1017,6 +1075,28 @@ def _render_original_form(is_awp: bool):
                 st.session_state["details_complete"] = True
                 st.session_state["project_details"] = required_fields
                 st.session_state["details_type"] = st.session_state["current_option"]
+
+                
+                # Fields to format ONLY in UI mode (is_awp == False)
+                UI_TRANSFORM_MAP = {
+                    'anticipated_start': fmt_date,
+                    'anticipated_end': fmt_date,
+                    'award_date': fmt_date,
+                    'tenadd': fmt_date     
+                }
+                
+                # ------------------ TRANSFORM STEP (UI mode only) ------------------
+                if not is_awp:
+                    for key, func in UI_TRANSFORM_MAP.items():
+                        if key in st.session_state:
+                            try:
+                                st.session_state[key] = func(st.session_state.get(key))
+                            except Exception:
+                                pass
+
+                #Select Geometry Points if AASHTOWARE Project
+                if is_awp:
+                    st.session_state["awp_geometry_points"] = aashtoware_geometry(st.session_state['awp_id'])
 
             # Snapshot everything for this source so it persists across page navigation
             current_source = st.session_state.get("info_option")

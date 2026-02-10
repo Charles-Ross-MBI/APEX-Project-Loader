@@ -24,16 +24,28 @@ def fmt_string(value):
 
 
 def fmt_int(val, year=False):
-    """Return an integer formatted with commas, or return the original value."""
-    # NOTE:
-    # - year=False: apply commas (10,000)
-    # - year=True : return plain int (years shouldn't be comma formatted)
-    if year == False:
+    """Return an integer formatted with commas, or return the original value.
+
+    - year=False: apply commas (10,000)
+    - year=True : return plain int (years shouldn't be comma formatted)
+    """
+
+    # --- NEW: coerce numeric strings (and strings with commas) to int ---
+    if isinstance(val, str):
+        s = val.strip()
+        if s:
+            # allow "10,000" style strings
+            s2 = s.replace(",", "")
+            if s2.isdigit():
+                val = int(s2)
+
+    if year is False:
         if isinstance(val, int):
             return f"{val:,}"
     else:
         if isinstance(val, int):
             return val
+
     return val
 
 
@@ -49,7 +61,28 @@ def fmt_date(val):
         return d.strftime("%m/%d/%Y")
     except Exception:
         return str(val)
+    
 
+def fmt_agol_date(val):
+    """
+    Convert AGOL millisecond timestamp (e.g., 1685404800000)
+    into a date string MM/DD/YYYY.
+    
+    Returns "" for None/invalid inputs.
+    """
+    if val is None:
+        return ""
+    
+    try:
+        # Accept strings or ints
+        ms = int(str(val).strip())
+
+        # Convert milliseconds → seconds
+        dt = datetime.datetime.fromtimestamp(ms / 1000)
+
+        return dt.strftime("%m/%d/%Y")
+    except Exception:
+        return ""
 
 
 def year_to_mmddyyyy(val):

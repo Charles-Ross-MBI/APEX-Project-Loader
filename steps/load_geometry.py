@@ -77,8 +77,9 @@ from util.geometry_util import (
     draw_line,
     draw_boundary,
     aashtoware_point,
-    aashtoware_path
+    aashtoware_path,
 )
+from agol.agol_util import aashtoware_geometry
 from agol.agol_district_queries import run_district_queries
 
 
@@ -318,22 +319,56 @@ def load_geometry_app():
     if not project_type:
         return
 
+
+
     st.markdown("###### Upload Geospatial Data\n", unsafe_allow_html=True)
 
-    # -------------------------------------------------------------------------
-    # Determine whether AASHTOWare upload option should be offered (Site + Route Only)
-    # -------------------------------------------------------------------------
-    show_awp_point_option = (
-        project_type.startswith("Site")
-        and st.session_state.get("aashto_selected_project")
-        and st.session_state.get("awp_dcml_latitude")
-        and st.session_state.get("awp_dcml_longitude")
-    )
 
-    show_awp_route_option = (
-        project_type.startswith("Route")
-        and st.session_state.get("aashto_selected_project")
-    )
+    # -------------------------------------------------------------------------
+    # Initialize flags (default to not showing options)
+    # -------------------------------------------------------------------------
+    show_awp_point_option = False
+    show_awp_route_option = False
+
+    points = st.session_state.get("awp_geometry_points") or {}
+
+    # -------------------------------------------------------------------------
+    # Determine whether AASHTOWare upload option should be offered (Site)
+    # - Requires Midpoint.lat and Midpoint.lon
+    # -------------------------------------------------------------------------
+    if project_type.startswith("Site"):
+        mid = points.get("Midpoint") or {}
+        mid_lat = mid.get("lat")
+        mid_lon = mid.get("lon")
+
+        # Only set and show if both values exist (non-None)
+        if mid_lat is not None and mid_lon is not None:
+            st.session_state["awp_dcml_mid_latitude"] = mid_lat
+            st.session_state["awp_dcml_mid_longitude"] = mid_lon
+            show_awp_point_option = True
+
+    # -------------------------------------------------------------------------
+    # Determine whether AASHTOWare upload option should be offered (Route)
+    # - Requires BOP.lat/lon and EOP.lat/lon
+    # -------------------------------------------------------------------------
+    if project_type.startswith("Route"):
+        bop = points.get("BOP") or {}
+        eop = points.get("EOP") or {}
+
+        bop_lat = bop.get("lat")
+        bop_lon = bop.get("lon")
+        eop_lat = eop.get("lat")
+        eop_lon = eop.get("lon")
+
+        # Only set and show if all four values exist (non-None)
+        if None not in (bop_lat, bop_lon, eop_lat, eop_lon):
+            st.session_state["awp_dcml_bop_latitude"] = bop_lat
+            st.session_state["awp_dcml_bop_longitude"] = bop_lon
+            st.session_state["awp_dcml_eop_latitude"] = eop_lat
+            st.session_state["awp_dcml_eop_longitude"] = eop_lon
+            show_awp_route_option = True
+
+
 
     # -------------------------------------------------------------------------
     # Project type routing
@@ -356,8 +391,8 @@ def load_geometry_app():
         # Route to selected mechanism (each writes canonical geometry keys).
         if option == "AASHTOWare":
             aashtoware_point(
-                st.session_state.get("awp_dcml_latitude"),
-                st.session_state.get("awp_dcml_longitude"),
+                mid_lat = st.session_state.get("awp_dcml_mid_latitude"),
+                mid_lon = st.session_state.get("awp_dcml_mid_longitude"),
             )
             st.session_state.selected_route = None
         elif option == "Upload Shapefile":
@@ -372,7 +407,7 @@ def load_geometry_app():
 
     elif project_type.startswith("Route"):
         # Route projects use line-based geometry capture.
-        options = ["Upload Shapefile", "Enter Milepoints", "Draw Route on Map"]
+        options = ["Upload Shapefile", "Enter Mileposts", "Draw Route on Map"]
 
         if show_awp_route_option:
             # AASHTOWare must be first and preselected when available.
@@ -386,14 +421,16 @@ def load_geometry_app():
 
         if option == "AASHTOWare":
             aashtoware_path(
-                st.session_state.get('midpoint_PLACEHOLDER'),
-                st.session_state.get('endpoint_PLACEHOLDER')
+                bop_lat=st.session_state["awp_dcml_bop_latitude"], 
+                bop_lon=st.session_state["awp_dcml_bop_longitude"], 
+                eop_lat=st.session_state["awp_dcml_eop_latitude"], 
+                eop_lon=st.session_state["awp_dcml_eop_longitude"]
             )
         elif option == "Upload Shapefile":
             polyline_shapefile()
             st.session_state.selected_point = None
-        elif option == "Enter Milepoints":
-            enter_milepoints()
+        elif option == "Enter Mileposts":
+            pass
             st.session_state.selected_point = None
         elif option == "Draw Route on Map":
             draw_line()

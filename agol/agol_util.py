@@ -143,6 +143,9 @@ def get_agol_token() -> str:
     except requests.exceptions.RequestException as e:
         # Handle network-related errors
         raise ConnectionError(f"Failed to connect to ArcGIS Online: {e}")
+    
+
+
 
 
 # =============================================================================
@@ -209,286 +212,47 @@ def query_record(url: str, layer: int, where: str, fields="*", return_geometry=F
 
 
 
+# =============================================================================
+# PULL AASHTOWARE GEOMETRY RECORD
+# =============================================================================
+# UPDATE TEXT
+# =============================================================================
+def aashtoware_geometry(awp_contract_id):
 
+    points = {}
 
-import math
-import requests
-import streamlit as st
-from shapely.geometry import LineString
-from shapely.ops import unary_union, linemerge
-
-
-def get_route_segment(
-    route_name: str,
-    from_mp: float,
-    to_mp: float,
-    *,
-    simplify: bool = True,
-    # Adaptive tolerance policy (in meters, converted to degrees internally)
-    tolerance_frac: float = 0.001,   # 0.1% of route length
-    min_tolerance_m: float = 5.0,    # clamp low end
-    max_tolerance_m: float = 25.0,   # clamp high end
-    preserve_topology: bool = True,
-    # Guardrails: prevent oversimplification
-    max_point_reduction: float = 0.90,  # don't remove >90% of vertices
-    min_points: int = 50               # but also don't reduce below this
-):
-    """
-    Queries the Pavement Condition Tenth Mile dataset for a route + milepoint range,
-    merges all geometry paths into a single unified line, optionally simplifies it
-    while staying strictly in EPSG:4326, and returns a folium-ready list of
-    [lat, lon] coordinates.
-    """
-
-    # ---------------------------------------------------------
-    # Helper functions (all 4326, no reprojection)
-    # ---------------------------------------------------------
-    def _normalize_to_single_line(g):
-        """
-        Returns a single LineString:
-        - If LineString: return as-is
-        - If MultiLineString: return the longest
-        - If GeometryCollection: collect lines and return the longest after merge
-        """
-        if g is None or g.is_empty:
-            return None
-
-        if g.geom_type == "LineString":
-            return g
-
-        if g.geom_type == "MultiLineString":
-            parts = list(g.geoms)
-            return max(parts, key=lambda x: x.length) if parts else None
-
-        # GeometryCollection or others
-        if hasattr(g, "geoms"):
-            line_parts = []
-            for sub in g.geoms:
-                if sub.geom_type == "LineString":
-                    line_parts.append(sub)
-                elif sub.geom_type == "MultiLineString":
-                    line_parts.extend(list(sub.geoms))
-
-            if not line_parts:
-                return None
-
-            merged_lines = linemerge(unary_union(line_parts))
-            if merged_lines.geom_type == "LineString":
-                return merged_lines
-            if merged_lines.geom_type == "MultiLineString":
-                parts = list(merged_lines.geoms)
-                return max(parts, key=lambda x: x.length) if parts else None
-
-        return None
-
-    def _mean_lat(line):
-        coords = list(line.coords)
-        if not coords:
-            return 0.0
-        return sum(lat for lon, lat in coords) / len(coords)
-
-    def _meters_per_degree(lat_deg):
-        """
-        Approx meters per degree at given latitude.
-        (Good enough for tolerance sizing; keeps CRS in 4326.)
-        """
-        lat_rad = math.radians(lat_deg)
-        m_per_deg_lat = 111_320.0
-        m_per_deg_lon = 111_320.0 * math.cos(lat_rad)
-        # Avoid zero near poles
-        m_per_deg_lon = max(m_per_deg_lon, 1e-6)
-        return m_per_deg_lat, m_per_deg_lon
-
-    def _approx_length_m(line):
-        """
-        Approximate geodesic length in meters using a local equirectangular approximation.
-        Uses per-segment scaling based on mean latitude.
-        """
-        coords = list(line.coords)
-        if len(coords) < 2:
-            return 0.0
-
-        lat0 = _mean_lat(line)
-        m_per_deg_lat, m_per_deg_lon = _meters_per_degree(lat0)
-
-        total = 0.0
-        (x0, y0) = coords[0]
-        for (x1, y1) in coords[1:]:
-            dx_m = (x1 - x0) * m_per_deg_lon
-            dy_m = (y1 - y0) * m_per_deg_lat
-            total += math.hypot(dx_m, dy_m)
-            x0, y0 = x1, y1
-        return total
-
-    def _adaptive_tolerance_deg(line):
-        """
-        Determine tolerance in degrees by:
-        1) approximate length in meters
-        2) tolerance_m = clamp(length_m * tolerance_frac, min_tolerance_m, max_tolerance_m)
-        3) convert meters to degrees using local meters/degree
-        """
-        length_m = _approx_length_m(line)
-        tol_m = length_m * float(tolerance_frac)
-
-        tol_m = max(float(min_tolerance_m), min(float(max_tolerance_m), tol_m))
-
-        lat0 = _mean_lat(line)
-        m_per_deg_lat, m_per_deg_lon = _meters_per_degree(lat0)
-
-        # Convert meters -> degrees (use the "stricter" conversion so we don't oversimplify)
-        tol_deg_lat = tol_m / m_per_deg_lat
-        tol_deg_lon = tol_m / m_per_deg_lon
-
-        # Use the smaller degree tolerance to be conservative
-        return min(tol_deg_lat, tol_deg_lon), tol_m, length_m
-
-    def _simplify_with_guardrails(line):
-        """
-        Simplify with adaptive tolerance but ensure we don't nuke the shape:
-        - preserve topology
-        - limit vertex reduction
-        - keep at least min_points (when possible)
-        """
-        if line is None or line.is_empty:
-            return line
-
-        orig_coords = list(line.coords)
-        if len(orig_coords) < 3:
-            return line
-
-        tol_deg, tol_m, length_m = _adaptive_tolerance_deg(line)
-
-        simplified = line.simplify(tol_deg, preserve_topology=preserve_topology)
-
-        # If simplification yields something unusable, revert
-        if simplified.is_empty or simplified.geom_type != "LineString":
-            return line
-
-        simp_coords = list(simplified.coords)
-        if len(simp_coords) < 2:
-            return line
-
-        # Guardrail 1: don't reduce below min_points unless original is already small
-        if len(orig_coords) >= min_points and len(simp_coords) < min_points:
-            # Ease off: reduce tolerance until we hit min_points or give up
-            # Do a small backoff loop without being too expensive
-            backoff = 0.5
-            for _ in range(6):
-                tol_deg *= backoff
-                simplified2 = line.simplify(tol_deg, preserve_topology=preserve_topology)
-                if simplified2.geom_type == "LineString":
-                    simp2_coords = list(simplified2.coords)
-                    if len(simp2_coords) >= min_points:
-                        return simplified2
-            return line
-
-        # Guardrail 2: don't remove "too many" vertices
-        removed_frac = 1.0 - (len(simp_coords) / max(1, len(orig_coords)))
-        if removed_frac > max_point_reduction:
-            # Ease off tolerance similarly
-            backoff = 0.5
-            for _ in range(6):
-                tol_deg *= backoff
-                simplified2 = line.simplify(tol_deg, preserve_topology=preserve_topology)
-                if simplified2.geom_type == "LineString":
-                    simp2_coords = list(simplified2.coords)
-                    removed_frac2 = 1.0 - (len(simp2_coords) / max(1, len(orig_coords)))
-                    if removed_frac2 <= max_point_reduction:
-                        return simplified2
-            return line
-
-        return simplified
-
-    # ---------------------------------------------------------
-    # Authentication
-    # ---------------------------------------------------------
-    token = get_agol_token()
-    if not token:
-        raise ValueError("Authentication failed: Invalid token.")
-
-    # ---------------------------------------------------------
-    # Build query URL
-    # ---------------------------------------------------------
-    url = st.session_state["milepoints"] + "/0/query"
-
-    where = (
-        f"ROUTE_NAME = '{route_name}' "
-        f"AND FROM_MPT >= {from_mp} "
-        f"AND TO_MPT <= {to_mp}"
+    geom_sel = select_record(
+        url=st.session_state['aashtoware_url'],
+        layer= st.session_state['geometry_layer'],
+        id_field = "CONTRACT_Id",
+        id_value=st.session_state['awp_id'],
+        fields = "*"
     )
 
-    params = {
-        "where": where,
-        "outFields": "*",
-        "returnGeometry": "true",
-        "outSR": 4326,
-        "f": "json",
-        "token": token
-    }
+    for feat in geom_sel or []:
+        a = feat.get("attributes", {})
+        ptype = a.get("TYPE")
 
-    # ---------------------------------------------------------
-    # Execute query
-    # ---------------------------------------------------------
-    response = requests.get(url, params=params)
-    data = response.json()
+        # Skip rows that don't have a TYPE
+        if not ptype:
+            continue
 
-    if "error" in data:
-        raise Exception(
-            f"API Error: {data['error']['message']} - {data['error'].get('details', [])}"
-        )
+        points[ptype] = {
+            "contract_id": a.get("CONTRACT_Id"),
+            "description": a.get("DESCRIPTION"),
+            "lat": a.get("DECIMALLATITUDE"),
+            "lon": a.get("DECIMALLONGITUDE"),
+            # include extras if you want:
+            #"objectid": a.get("OBJECTID"),
+            # "format": a.get("FORMAT"),
+            # "latitude_dms": a.get("LATITUDE"),
+            # "longitude_dms": a.get("LONGITUDE"),
+            # "description": a.get("DESCRIPTION"),
+        }
 
-    features = data.get("features", [])
-    if not features:
-        return []
+    return points
 
-    # ---------------------------------------------------------
-    # Convert all geometry paths into Shapely LineStrings (still 4326)
-    # ---------------------------------------------------------
-    lines = []
-    for f in features:
-        geom = f.get("geometry", {}) or {}
-        for path in geom.get("paths", []) or []:
-            if len(path) >= 2:
-                # ArcGIS path coords are [x, y] == [lon, lat]
-                line = LineString([(lon, lat) for lon, lat in path])
-                if not line.is_empty and line.length > 0:
-                    lines.append(line)
-
-    if not lines:
-        return []
-
-    # ---------------------------------------------------------
-    # Merge overlapping / reversed / crossing segments
-    # ---------------------------------------------------------
-    merged = linemerge(unary_union(lines))
-
-    # ---------------------------------------------------------
-    # Normalize to a single representative LineString
-    # ---------------------------------------------------------
-    route_line = _normalize_to_single_line(merged)
-    if route_line is None or route_line.is_empty:
-        return []
-
-    # ---------------------------------------------------------
-    # Simplify (adaptive tolerance) while staying in EPSG:4326
-    # ---------------------------------------------------------
-    if simplify:
-        route_line = _simplify_with_guardrails(route_line)
-
-    # ---------------------------------------------------------
-    # Convert to Folium format [lat, lon]
-    # ---------------------------------------------------------
-    coords = list(route_line.coords)
-    if not coords:
-        return []
-
-    unified_path = [[lat, lon] for lon, lat in coords]
-    return unified_path
-
-
-
-
-
+    
 
 
 
@@ -703,58 +467,218 @@ def select_record(url: str, layer: int, id_field: str, id_value: str, fields="*"
 
     except Exception as e:
         raise Exception(f"Error retrieving project record: {e}")
+    
 
 
-# =============================================================================
-# DELETE HELPERS
-# =============================================================================
-# delete_project():
-#   - Calls deleteFeatures endpoint with a GlobalID where clause
-#   - Used as a best-effort cleanup step when a multi-step upload fails
-# =============================================================================
-def delete_project(url: str, layer: int, globalid: str) -> bool:
+def get_objectids_by_identifier(url: str, layer: int, id_field: str, id_value: str):
     """
-    Delete a project from an ArcGIS Feature Service using its GlobalID.
+    Retrieve one or more OBJECTIDs from a feature layer using an identifier field.
 
-    This function calls the ArcGIS REST API `deleteFeatures` endpoint to remove
-    a feature from the specified layer. It uses a `where` clause to match the
-    provided GlobalID.
+    Parameters:
+        url: str
+            Base ArcGIS REST service URL.
+        layer: int
+            Layer ID to query.
+        id_field: str
+            Attribute field to filter by (e.g. 'Identifier', 'GlobalID').
+        id_value: str
+            Value to match in the id_field.
 
     Returns:
-        bool: True if deletion was successful, False otherwise.
+        list[int] | int | None:
+            - Single OBJECTID if only one match
+            - List of OBJECTIDs if multiple matches
+            - None if no results
     """
     try:
-        # Retrieve authentication token
         token = get_agol_token()
         if not token:
             raise ValueError("Authentication failed: Invalid token.")
 
-        # Parameters for the deleteFeatures request
         params = {
-            "where": f"GlobalID='{globalid}'",  # Filter by GlobalID
-            "f": "json",  # Response format
-            "token": token  # Authentication token
+            "where": f"{id_field}='{id_value}'",
+            "outFields": "OBJECTID",
+            "returnGeometry": "false",
+            "f": "json",
+            "token": token
         }
 
-        # Construct deleteFeatures endpoint URL
-        delete_url = f"{url}/{layer}/deleteFeatures"
+        query_url = f"{url}/{layer}/query"
+        response = requests.get(query_url, params=params)
 
-        # Send POST request to ArcGIS REST API
-        response = requests.post(delete_url, data=params)
-        result = response.json()
+        if response.status_code != 200:
+            raise Exception(
+                f"Request failed ({response.status_code}): {response.text}"
+            )
 
-        # Check response for deleteResults
-        if "deleteResults" in result:
-            success = all(r.get("success", False) for r in result["deleteResults"])
-            return True
-        else:
-            print("Unexpected response:", result)
-            return False
+        data = response.json()
+
+        if "error" in data:
+            raise Exception(
+                f"API Error: {data['error']['message']} - "
+                f"{data['error'].get('details', [])}"
+            )
+
+        features = data.get("features", [])
+
+        if not features:
+            return None
+
+        # extract OBJECTIDs
+        objectids = [
+            feat["attributes"].get("OBJECTID")
+            for feat in features
+            if feat.get("attributes") and feat["attributes"].get("OBJECTID") is not None
+        ]
+
+        if not objectids:
+            raise Exception("No OBJECTID field found in matching records.")
+
+        # Return single ID instead of list if only one
+        return objectids[0] if len(objectids) == 1 else objectids
 
     except Exception as e:
-        # Catch any errors (network, JSON parsing, etc.)
-        print(f"Error deleting project: {e}")
+        raise Exception(f"Error retrieving OBJECTIDs: {e}")
+
+
+# =============================================================================
+# CASCADE DELETE BY GLOBALID (RELATED → MAIN)
+# =============================================================================
+# delete_cascade_by_globalid():
+#   - Deletes related-layer rows (parentglobalid == <globalid_value>)
+#   - Then deletes the main-layer row(s) (<globalid_field> == <globalid_value>)
+#   - Uses get_agol_token() directly; no timeout parameter
+#   - "No matches" is normal: no warnings; continue
+#   - Returns True if all delete calls completed without API/network errors
+# =============================================================================
+
+def delete_cascade_by_globalid(
+    url,
+    main_layer,
+    related_layers,
+    globalid_field,
+    globalid_value,
+    parent_field="parentglobalid",
+):
+    """
+    Delete related-layer records by parentglobalid, then delete the main-layer
+    record by its GlobalID field.
+
+    Args:
+        url (str):
+            Base Feature Service URL, e.g. 'https://services.arcgis.com/.../FeatureServer'
+        main_layer (int|str):
+            The parent (main) layer index/path containing the GlobalID field.
+        related_layers (iterable of int|str):
+            Layers that contain the foreign key in `parent_field`.
+        globalid_field (str):
+            The GlobalID field name in the main layer (often 'GlobalID').
+        globalid_value (str):
+            The exact GlobalID value to match. Pass it as stored in AGOL (with or without braces).
+        id_field_name (str):
+            The main layer's ID field name (for traceability/logging only).
+        id_field_value (any):
+            The value of that ID field (for traceability/logging only).
+        parent_field (str):
+            The FK field name in related layers referencing the parent GlobalID.
+            Defaults to 'parentglobalid'.
+
+    Returns:
+        bool: True if all delete calls succeeded at the HTTP/API level; False otherwise.
+              (Zero matches are considered normal and do not count as failures.)
+    """
+    # --- Token retrieval is fixed (no parameter) ---
+    try:
+        token = get_agol_token()
+        if not token:
+            print("delete_cascade_by_globalid: Authentication failed: Invalid token.")
+            return False
+    except Exception as e:
+        print(f"delete_cascade_by_globalid: Error obtaining token: {e}")
         return False
+
+    base_url = url.rstrip("/")
+    all_ok = True
+
+    # Escape any single quotes in the GUID for the where clause
+    gid = str(globalid_value).replace("'", "''")
+
+    # --------------------------------
+    # Helper: POST deleteFeatures call
+    # --------------------------------
+    def _delete_where(layer_id_or_path, where_clause):
+        nonlocal all_ok
+        layer_str = str(layer_id_or_path).strip().strip("/")
+        delete_url = f"{base_url}/{layer_str}/deleteFeatures"
+
+        params = {
+            "where": where_clause,
+            "f": "json",
+            "token": token,
+            # "rollbackOnFailure": True,  # optional if desired
+        }
+
+        try:
+            resp = requests.post(delete_url, data=params)
+        except Exception as e:
+            print(f"[Layer {layer_str}] Network error during deleteFeatures: {e}")
+            all_ok = False
+            return
+
+        if resp.status_code != 200:
+            print(f"[Layer {layer_str}] HTTP {resp.status_code}: {resp.text[:300]}")
+            all_ok = False
+            return
+
+        try:
+            payload = resp.json()
+        except Exception as e:
+            print(f"[Layer {layer_str}] Invalid JSON: {e}; body={resp.text[:300]}")
+            all_ok = False
+            return
+
+        if "error" in payload:
+            err = payload.get("error", {})
+            print(f"[Layer {layer_str}] Server error: {err.get('message')} | {err.get('details')}")
+            all_ok = False
+            return
+
+        # Normal: deleteResults list; empty when no matches. Both are OK.
+        results = payload.get("deleteResults")
+
+        if results is None:
+            # Some services omit deleteResults when nothing matched; treat as normal.
+            # Log for visibility only.
+            # print(f"[Layer {layer_str}] No deleteResults (likely no matches).")
+            return
+
+        # If present, ensure all results report success=True
+        for r in results:
+            if not (isinstance(r, dict) and r.get("success", False)):
+                print(f"[Layer {layer_str}] One or more delete results failed: {results}")
+                all_ok = False
+                break
+
+    # -----------------------------------------
+    # 1) Delete related-layer items (FK = GID)
+    # -----------------------------------------
+    where_related = f"{parent_field} = '{gid}'"
+    for rl in (related_layers or []):
+        _delete_where(rl, where_related)
+
+    # ------------------------------------------------
+    # 2) Delete main-layer item(s) by GlobalID field
+    # ------------------------------------------------
+    where_main = f"{globalid_field} = '{gid}'"
+    _delete_where(main_layer, where_main)
+
+    # Optional: trace log (quiet, but useful during dev)
+    # print(
+    #     f"[CascadeDelete] Main layer '{main_layer}' ({id_field_name}={id_field_value}) "
+    #     f"deleted by {globalid_field}={globalid_value} (related first)."
+    # )
+
+    return all_ok
 
 
 # =============================================================================
@@ -1061,10 +985,230 @@ class AGOLDataLoader:
             "message": self.message,
             "globalids": self.globalids
         }
+    
+
+    def update_features(self, payload: dict):
+        """
+        Update existing features in the AGOL feature layer using applyEdits.
+
+        Requirements:
+            - Each update feature must include attributes["OBJECTID"].
+
+        Returns:
+            dict: { "success": bool, "message": str, "globalids": list }
+        """
+
+        # Validate payload structure
+        if "updates" not in payload or not isinstance(payload["updates"], list):
+            self.success = False
+            self.message = "Payload must contain a list under key 'updates'."
+            self.logger.error(self.message)
+            return {
+                "success": self.success,
+                "message": self.message,
+                "globalids": self.globalids
+            }
+
+        # Enforce OBJECTID presence before posting
+        missing_ids = []
+        for idx, feat in enumerate(payload["updates"]):
+            attrs = feat.get("attributes", {})
+            if "OBJECTID" not in attrs:
+                missing_ids.append(idx)
+
+        if missing_ids:
+            self.success = False
+            self.message = (
+                "Update failed: Missing OBJECTID for "
+                f"feature indices {missing_ids}. OBJECTID is required."
+            )
+            self.logger.error(self.message)
+            return {
+                "success": self.success,
+                "message": self.message,
+                "globalids": self.globalids
+            }
+
+        endpoint = f"{self.url}/{self.layer}/applyEdits"
+        self.logger.info("Starting update_features process...")
+
+        try:
+            resp = requests.post(
+                endpoint,
+                data={
+                    "f": "json",
+                    "token": self.token,
+                    "updates": json.dumps(payload["updates"])
+                }
+            )
+
+            self.logger.info("Raw response text: %s", resp.text)
+            result = resp.json()
+
+            if "updateResults" in result:
+                update_results = result["updateResults"]
+                failures = [r for r in update_results if not r.get("success")]
+
+                if failures:
+                    self.success = False
+                    error_messages = []
+                    for r in failures:
+                        err = r.get("error")
+                        if err:
+                            error_messages.append(
+                                f"Code {err.get('code')}: {err.get('description')}"
+                            )
+                    self.message = (
+                        f"Failed to update {len(failures)} feature(s). "
+                        f"Errors: {', '.join(error_messages)}"
+                    )
+                    self.logger.error(self.message)
+
+                else:
+                    self.success = True
+                    self.message = "All features updated successfully."
+                    self.globalids = [
+                        r.get("globalId") for r in update_results if r.get("success")
+                    ]
+                    self.logger.info(self.message)
+
+            else:
+                self.success = False
+                self.message = f"Unexpected response: {result}"
+                self.logger.error(self.message)
+
+        except Exception as e:
+            self.success = False
+            self.message = f"Error during update_features: {str(e)}"
+            self.logger.exception(self.message)
+
+        return {
+            "success": self.success,
+            "message": self.message,
+            "globalids": self.globalids
+        }
+    
+
+    def delete_features(self, payload: dict):
+        """
+        Delete features from the AGOL feature layer using applyEdits.
+
+        Behavior:
+            - Expects payload["updates"] in the same style as update_features()
+            - Extracts all OBJECTIDs from attributes
+            - Sends them as a comma-separated string to applyEdits 'deletes'
+            - Returns a consistent { success, message, objectids } structure
+        """
+
+        # Validate payload shape
+        if "updates" not in payload or not isinstance(payload["updates"], list):
+            self.success = False
+            self.message = "Payload must contain a list under key 'updates'."
+            self.logger.error(self.message)
+            return {
+                "success": self.success,
+                "message": self.message,
+                "objectids": []
+            }
+
+        updates = payload["updates"]
+
+        # Collect OBJECTIDs from all update entries
+        objectids = []
+        for entry in updates:
+            attrs = entry.get("attributes", {})
+            oid = attrs.get("OBJECTID")
+            if oid is not None:
+                objectids.append(str(oid))
+
+        if not objectids:
+            self.success = False
+            self.message = "No OBJECTIDs found in payload['updates'] for deletion."
+            self.logger.error(self.message)
+            return {
+                "success": self.success,
+                "message": self.message,
+                "objectids": []
+            }
+
+        deletes_param = ",".join(objectids)
+        endpoint = f"{self.url}/{self.layer}/applyEdits"
+
+        self.logger.info("Starting delete_features for OBJECTIDs: %s", deletes_param)
+
+        try:
+            resp = requests.post(
+                endpoint,
+                data={
+                    "f": "json",
+                    "token": self.token,
+                    "deletes": deletes_param
+                }
+            )
+
+            self.logger.info("Raw response text: %s", resp.text)
+            result = resp.json()
+
+            deleted_oids = []
+
+            if "deleteResults" in result:
+                delete_results = result["deleteResults"]
+
+                failures = [r for r in delete_results if not r.get("success")]
+                successes = [r for r in delete_results if r.get("success")]
+
+                if failures:
+                    self.success = False
+                    error_messages = []
+                    for r in failures:
+                        err = r.get("error")
+                        oid = r.get("objectId")
+                        if err:
+                            error_messages.append(
+                                f"OID {oid}: Code {err.get('code')} - {err.get('description')}"
+                            )
+                        else:
+                            error_messages.append(f"OID {oid}: Unknown error")
+
+                    self.message = (
+                        f"Failed to delete {len(failures)} feature(s). "
+                        f"Errors: {', '.join(error_messages)}"
+                    )
+                    self.logger.error(self.message)
+
+                else:
+                    self.success = True
+                    self.message = "All features deleted successfully."
+                    self.logger.info(self.message)
+
+                deleted_oids = [
+                    r.get("objectId") for r in successes if r.get("objectId") is not None
+                ]
+
+            else:
+                self.success = False
+                self.message = f"Unexpected response: {result}"
+                self.logger.error(self.message)
+
+        except Exception as e:
+            self.success = False
+            self.message = f"Error during delete_features: {str(e)}"
+            self.logger.exception(self.message)
+            deleted_oids = []
+
+        return {
+            "success": self.success,
+            "message": self.message,
+            "objectids": deleted_oids
+        }
 
 
 
-
+# =============================================================================
+# UPDATE_TITLE
+# =============================================================================
+# UPDATE_DESCRIP
+# =============================================================================
 class AGOLRecordLoader:
     """
     Loads one or more AGOL records using select_record() and stores
@@ -1170,3 +1314,445 @@ class AGOLRecordLoader:
             setattr(self, key, value)
 
         setattr(self, "geometry", self.geometry)
+
+
+
+
+class AGOLRouteSegmentFinder:
+    """
+    Queries a routes FeatureServer layer once for features intersecting a WGS84 envelope,
+    clips returned polylines to that envelope client-side, then (without using any route IDs)
+    selects ANY clipped route segments that the BOP and EOP points lie on (or are within tolerance of),
+    merges those selected segments, and returns the merged geometry.
+
+    select_and_merge_point_routes(...) returns:
+      {
+        "success": bool,
+        "message": str,
+        "merged_geometry": dict | None,   # ESRI polyline JSON (WKID 4326)
+        "selected_objectids": list,       # OBJECTIDs of all features that were merged (if present)
+        "bop_matches": list,              # [{ "objectid": <int|None>, "distance_m": <float> }, ...]
+        "eop_matches": list               # [{ "objectid": <int|None>, "distance_m": <float> }, ...]
+      }
+    """
+
+    def __init__(self, url, layer):
+        self.url = url.rstrip("/")
+        self.layer = int(layer)
+        self.token = self._authenticate()
+
+        self.success = False
+        self.message = None
+
+        # Optional logger (assumes logging imported by your app)
+        try:
+            logging.basicConfig(level=logging.INFO)
+            self.logger = logging.getLogger("AGOLRouteSegmentFinder")
+        except Exception:
+            self.logger = None
+
+    # ----------------------------- AUTH -----------------------------
+    def _authenticate(self):
+        token = get_agol_token()
+        if not token:
+            raise ValueError("Authentication failed: Invalid token.")
+        return token
+
+    # --------------------------- HELPERS ----------------------------
+    def _build_envelope_square_meters(self, bop_pair, eop_pair, pad_deg, square_side_m=None, margin_m=0):
+        """
+        Build a visually square (meter-true) envelope around the two points:
+          - If square_side_m is None:
+              1) Make an initial degree bbox around the points with pad_deg.
+              2) Convert that bbox width/height to meters at the center latitude.
+              3) Target side = max(width_m, height_m) + margin_m (ensure non-zero).
+          - If square_side_m is provided: use that as the side length directly.
+
+        Returns a WGS84 envelope dict that appears square on web maps.
+        """
+        pad = float(pad_deg)
+        if pad < 0:
+            pad = 0.0
+
+        # Expect (lat, lon)
+        lat1, lon1 = bop_pair
+        lat2, lon2 = eop_pair
+
+        # Initial bbox in degrees with symmetric pad
+        xmin = min(lon1, lon2) - pad
+        xmax = max(lon1, lon2) + pad
+        ymin = min(lat1, lat2) - pad
+        ymax = max(lat1, lat2) + pad
+
+        # Center latitude controls meters-per-degree of longitude
+        cx = (xmin + xmax) / 2.0
+        cy = (ymin + ymax) / 2.0
+
+        # Local meters-per-degree approximations
+        m_per_deg_lat = 111_320.0
+        m_per_deg_lon = 111_320.0 * max(0.0, math.cos(math.radians(cy)))
+
+        # Current bbox size in meters
+        width_deg  = max(0.0, xmax - xmin)
+        height_deg = max(0.0, ymax - ymin)
+        width_m    = width_deg  * (m_per_deg_lon if m_per_deg_lon > 0 else 0.0)
+        height_m   = height_deg * m_per_deg_lat
+
+        # Decide target side length in meters
+        if square_side_m is None:
+            side_m = max(width_m, height_m) + float(margin_m)
+            if side_m <= 0:
+                side_m = 50.0  # minimum safety size
+        else:
+            side_m = max(0.0, float(square_side_m))
+            if side_m == 0.0:
+                side_m = 50.0
+
+        # Convert target side back to degree offsets about the center
+        half_deg_lon = (side_m / (m_per_deg_lon if m_per_deg_lon > 0 else 1e9)) / 2.0
+        half_deg_lat = (side_m / m_per_deg_lat) / 2.0
+
+        xmin_sq = cx - half_deg_lon
+        xmax_sq = cx + half_deg_lon
+        ymin_sq = cy - half_deg_lat
+        ymax_sq = cy + half_deg_lat
+
+        # Clamp to valid geographic ranges
+        xmin_sq = max(-180.0, xmin_sq)
+        xmax_sq = min(180.0,  xmax_sq)
+        ymin_sq = max(-90.0,  ymin_sq)
+        ymax_sq = min(90.0,   ymax_sq)
+
+        if hasattr(self, "logger") and self.logger:
+            self.logger.info(
+                f"[meter-square] side_m={side_m:.2f} | width_deg={xmax_sq - xmin_sq:.8f} "
+                f"height_deg={ymax_sq - ymin_sq:.8f} center=({cy:.6f},{cx:.6f})"
+            )
+
+        return {
+            "xmin": xmin_sq,
+            "ymin": ymin_sq,
+            "xmax": xmax_sq,
+            "ymax": ymax_sq,
+            "spatialReference": {"wkid": 4326}
+        }
+
+    def _build_point_envelope(self, lat, lon, pad_deg):
+        """
+        Build a small *square* envelope around a point (in degrees).
+        """
+        return {
+            "xmin": lon - pad_deg,
+            "ymin": lat - pad_deg,
+            "xmax": lon + pad_deg,
+            "ymax": lat + pad_deg,
+            "spatialReference": {"wkid": 4326}
+        }
+
+    def _query_intersecting_routes(self, envelope, max_page_size=2000):
+        import json, requests
+        endpoint = f"{self.url}/{self.layer}/query"
+        params_base = {
+            "f": "json",
+            "where": "1=1",
+            "geometryType": "esriGeometryEnvelope",
+            "geometry": json.dumps(envelope),
+            "inSR": 4326,
+            "outSR": 4326,
+            "spatialRel": "esriSpatialRelIntersects",
+            "returnGeometry": "true",
+            "outFields": "*",
+            "token": self.token,
+            "resultRecordCount": max_page_size,
+        }
+
+        features = []
+        result_offset = 0
+        while True:
+            params = dict(params_base)
+            params["resultOffset"] = result_offset
+
+            resp = requests.get(endpoint, params=params, timeout=60)
+            data = resp.json()
+
+            if "error" in data:
+                raise Exception(f"API Error: {data['error']['message']} - {data['error'].get('details', [])}")
+
+            batch = data.get("features", []) or []
+            features.extend(batch)
+
+            if not data.get("exceededTransferLimit"):
+                break
+
+            result_offset += len(batch) if len(batch) > 0 else max_page_size
+
+        return features
+
+    # --------------------- CLIENT-SIDE GEOMETRY ---------------------
+    def _meters_per_degree(self, lat_deg):
+        R = 6371008.8
+        deg2rad = math.pi / 180.0
+        m_per_deg_lat = R * deg2rad
+        m_per_deg_lon = R * math.cos(lat_deg * deg2rad) * deg2rad
+        return m_per_deg_lat, m_per_deg_lon
+
+    def _point_segment_distance_m(self, px, py, x1, y1, x2, y2):
+        """
+        Approximate point-to-segment distance (meters) using a local equirectangular projection.
+        Inputs are lon/lat degrees.
+        """
+        lat0 = (py + y1 + y2) / 3.0
+        m_lat, m_lon = self._meters_per_degree(lat0)
+
+        P = (px * m_lon, py * m_lat)
+        A = (x1 * m_lon, y1 * m_lat)
+        B = (x2 * m_lon, y2 * m_lat)
+
+        ax, ay = A
+        bx, by = B
+        pxm, pym = P
+
+        abx, aby = (bx - ax), (by - ay)
+        apx, apy = (pxm - ax), (pym - ay)
+        ab2 = abx*abx + aby*aby
+
+        if ab2 == 0.0:
+            return math.hypot(apx, apy)
+
+        t = (apx*abx + apy*aby) / ab2
+        t = 0.0 if t < 0.0 else (1.0 if t > 1.0 else t)
+
+        cx = ax + t * abx
+        cy = ay + t * aby
+
+        dx = pxm - cx
+        dy = pym - cy
+        return math.hypot(dx, dy)
+
+    def _clip_segment_to_bbox(self, x1, y1, x2, y2, xmin, ymin, xmax, ymax):
+        """
+        Cohen–Sutherland clip of a single segment (x=lon,y=lat) to the bbox.
+        Returns (x1c, y1c, x2c, y2c) or None if fully outside.
+        """
+        def code(x, y):
+            c = 0
+            if x < xmin: c |= 1
+            elif x > xmax: c |= 2
+            if y < ymin: c |= 4
+            elif y > ymax: c |= 8
+            return c
+
+        c1 = code(x1, y1)
+        c2 = code(x2, y2)
+
+        while True:
+            if not (c1 | c2):
+                return (x1, y1, x2, y2)
+            if c1 & c2:
+                return None
+
+            out = c1 or c2
+            dx = x2 - x1
+            dy = y2 - y1
+
+            if out & 8:     # top
+                x = x1 + dx * (ymax - y1) / dy if dy != 0 else x1
+                y = ymax
+            elif out & 4:   # bottom
+                x = x1 + dx * (ymin - y1) / dy if dy != 0 else x1
+                y = ymin
+            elif out & 2:   # right
+                y = y1 + dy * (xmax - x1) / dx if dx != 0 else y1
+                x = xmax
+            else:           # left
+                y = y1 + dy * (xmin - x1) / dx if dx != 0 else y1
+                x = xmin
+
+            if out == c1:
+                x1, y1 = x, y
+                c1 = code(x1, y1)
+            else:
+                x2, y2 = x, y
+                c2 = code(x2, y2)
+
+    def _clip_polyline_to_bbox(self, polyline, envelope):
+        xmin, ymin, xmax, ymax = envelope["xmin"], envelope["ymin"], envelope["xmax"], envelope["ymax"]
+        out_paths = []
+
+        for path in polyline.get("paths", []):
+            current = []
+            for i in range(1, len(path)):
+                x1, y1 = path[i-1]
+                x2, y2 = path[i]
+                seg = self._clip_segment_to_bbox(x1, y1, x2, y2, xmin, ymin, xmax, ymax)
+                if seg is None:
+                    if current:
+                        out_paths.append(current)
+                        current = []
+                    continue
+                cx1, cy1, cx2, cy2 = seg
+                if not current:
+                    current.append([cx1, cy1])
+                else:
+                    lastx, lasty = current[-1]
+                    if abs(lastx - cx1) > 1e-12 or abs(lasty - cy1) > 1e-12:
+                        current.append([cx1, cy1])
+                current.append([cx2, cy2])
+
+            if current:
+                out_paths.append(current)
+
+        if not out_paths:
+            return None
+
+        return {"paths": out_paths, "spatialReference": {"wkid": 4326}}
+
+    def _min_point_to_polyline_distance_m(self, polyline, point_pair):
+        """
+        Minimum point-to-polyline distance (meters) across all segments.
+        """
+        if not polyline or not polyline.get("paths"):
+            return None
+        latp, lonp = point_pair
+        best = None
+        for path in polyline["paths"]:
+            for i in range(1, len(path)):
+                lon1, lat1 = path[i-1]
+                lon2, lat2 = path[i]
+                d = self._point_segment_distance_m(lonp, latp, lon1, lat1, lon2, lat2)
+                if (best is None) or (d < best):
+                    best = d
+        return best
+
+    # --------------------------- PUBLIC API -------------------------
+    def select_and_merge_point_routes(self, bop_pair, eop_pair, pad_deg=0.0005, tolerance_m=15.0):
+        """
+        1) Build bbox from BOP/EOP (+ padding) using the meter-true square envelope
+        2) Query the layer once for routes intersecting the bbox
+        3) Clip each route to the bbox (client-side)
+        4) Select ANY clipped routes that the BOP/EOP are on (within tolerance_m)
+        5) Merge the selected clipped routes and return the merged polyline
+        """
+        if self.logger: 
+            self.logger.info("Selecting and merging route segments for BOP/EOP (no route IDs)...")
+
+        try:
+            # 1) Envelope: USE THE METER-TRUE METHOD YOU PROVIDED
+            envelope = self._build_envelope_square_meters(bop_pair, eop_pair, pad_deg)
+
+            # 2) Query intersecting routes once
+            features = self._query_intersecting_routes(envelope)
+            if not features:
+                self.success = False
+                self.message = "No route features found in bounding box."
+                if self.logger: self.logger.info(self.message)
+                return {
+                    "success": self.success,
+                    "message": self.message,
+                    "merged_geometry": None,
+                    "selected_objectids": [],
+                    "bop_matches": [],
+                    "eop_matches": []
+                }
+
+            # 3) Clip features to envelope and keep non-empty results
+            clipped = []
+            for f in features:
+                g = f.get("geometry")
+                if not g or not g.get("paths"):
+                    continue
+                cg = self._clip_polyline_to_bbox(g, envelope)
+                if cg and cg.get("paths"):
+                    # ensure SR
+                    if "spatialReference" not in cg:
+                        cg["spatialReference"] = {"wkid": 4326}
+                    clipped.append({"feature": f, "clipped": cg})
+
+            if not clipped:
+                self.success = False
+                self.message = "No clipped route geometry inside the bounding box."
+                if self.logger: self.logger.info(self.message)
+                return {
+                    "success": self.success,
+                    "message": self.message,
+                    "merged_geometry": None,
+                    "selected_objectids": [],
+                    "bop_matches": [],
+                    "eop_matches": []
+                }
+
+            # 4) For each point, select ANY clipped routes within tolerance (no route IDs)
+            bop_matches = []
+            eop_matches = []
+            for rec in clipped:
+                cg = rec["clipped"]
+                attrs = rec["feature"].get("attributes") or {}
+                oid = attrs.get("OBJECTID")
+
+                d_bop = self._min_point_to_polyline_distance_m(cg, bop_pair)
+                if d_bop is not None and d_bop <= tolerance_m:
+                    bop_matches.append({"objectid": oid, "distance_m": float(d_bop)})
+
+                d_eop = self._min_point_to_polyline_distance_m(cg, eop_pair)
+                if d_eop is not None and d_eop <= tolerance_m:
+                    eop_matches.append({"objectid": oid, "distance_m": float(d_eop)})
+
+            # Anything matched?
+            selected_indices = set()
+            selected_objectids = []
+
+            for idx, rec in enumerate(clipped):
+                oid = (rec["feature"].get("attributes") or {}).get("OBJECTID")
+                # include if it appears in either match list
+                in_bop = any(m["objectid"] == oid for m in bop_matches)
+                in_eop = any(m["objectid"] == oid for m in eop_matches)
+                if in_bop or in_eop:
+                    selected_indices.add(idx)
+                    if oid is not None:
+                        selected_objectids.append(oid)
+
+            if not selected_indices:
+                self.success = False
+                self.message = f"No route segment within {tolerance_m} m of either point."
+                if self.logger: self.logger.info(self.message)
+                return {
+                    "success": self.success,
+                    "message": self.message,
+                    "merged_geometry": None,
+                    "selected_objectids": [],
+                    "bop_matches": bop_matches,
+                    "eop_matches": eop_matches
+                }
+
+            # 5) Merge: concatenate paths from all selected clipped routes
+            merged_paths = []
+            for idx in selected_indices:
+                merged_paths.extend(clipped[idx]["clipped"]["paths"])
+
+            merged = {"paths": merged_paths, "spatialReference": {"wkid": 4326}}
+
+            # Done
+            self.success = True
+            self.message = "Merged route segments for points computed successfully."
+            if self.logger: self.logger.info(self.message)
+            return {
+                "success": self.success,
+                "message": self.message,
+                "merged_geometry": merged,
+                "selected_objectids": selected_objectids,
+                "bop_matches": bop_matches,
+                "eop_matches": eop_matches
+            }
+
+        except Exception as e:
+            self.success = False
+            self.message = f"Error during select_and_merge_point_routes: {str(e)}"
+            if self.logger: self.logger.exception(self.message)
+            return {
+                "success": self.success,
+                "message": self.message,
+                "merged_geometry": None,
+                "selected_objectids": [],
+                "bop_matches": [],
+                "eop_matches": []
+            }

@@ -58,7 +58,7 @@ Notes:
 import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
 import datetime
-from agol.agol_util import select_record
+from agol.agol_util import select_record, get_objectids_by_identifier
 
 # =============================================================================
 # PAYLOAD CLEANING / NORMALIZATION HELPERS
@@ -414,7 +414,7 @@ def project_payload():
 # - Normalizes nesting for points, routes (paths), and boundaries (rings)
 # - Returns a list of cleaned payloads (one per geometry) or None if no selection
 # =============================================================================
-def geometry_payload(globalid: str):
+def geometry_payload():
     try:
         payloads = []  # final list of cleaned payloads
 
@@ -457,7 +457,7 @@ def geometry_payload(globalid: str):
                                 "Site_Borough_Census_Area": st.session_state.get("borough_string"),
                                 "Site_Senate_District": st.session_state.get("senate_string"),
                                 "Site_House_District": st.session_state.get("house_string"),
-                                "parentglobalid": globalid
+                                "parentglobalid": st.session_state.get("apex_globalid", None)
                             },
                             "geometry": {
                                 "x": float(lon),
@@ -515,7 +515,7 @@ def geometry_payload(globalid: str):
                                 "Route_Borough_Census_Area": st.session_state.get("borough_string"),
                                 "Route_Senate_District": st.session_state.get("senate_string"),
                                 "Route_House_District": st.session_state.get("house_string"),
-                                "parentglobalid": globalid
+                                "parentglobalid": st.session_state.get("apex_globalid", None)
                             },
                             "geometry": {
                                 "paths": [agol_path],  # ← now correct, no extra nesting
@@ -561,7 +561,7 @@ def geometry_payload(globalid: str):
                                 "Boundary_Borough_Census_Area": st.session_state.get("borough_string"),
                                 "Boundary_Senate_District": st.session_state.get("senate_string"),
                                 "Boundary_House_District": st.session_state.get("house_string"),
-                                "parentglobalid": globalid
+                                "parentglobalid": st.session_state.get("apex_globalid", None)
                             },
                             "geometry": {
                                 "rings": [converted],
@@ -586,7 +586,7 @@ def geometry_payload(globalid: str):
 # =============================================================================
 # PAYLOAD BUILDER: IMPACTED COMMUNITIES (OPTIONAL)
 # =============================================================================
-def communities_payload(globalid: str):
+def communities_payload():
     """
     Build an ArcGIS applyEdits payload for impacted communities.
 
@@ -628,7 +628,7 @@ def communities_payload(globalid: str):
                 payload["adds"].append({
                     "attributes": {
                         "Community_Name": name,
-                        "parentglobalid": globalid
+                        "parentglobalid": st.session_state.get("apex_globalid", None)
                     },
                     "geometry": {
                         "x": x,
@@ -653,7 +653,7 @@ def communities_payload(globalid: str):
 # =============================================================================
 # PAYLOAD BUILDER: GEOGRAPHY (OPTIONAL OVERLAYS)
 # =============================================================================
-def geography_payload(globalid: str, name: str):
+def geography_payload(name: str):
     """
     Build a payload containing attributes and geometry for a given geography type.
 
@@ -704,7 +704,7 @@ def geography_payload(globalid: str, name: str):
             payload["adds"].append({
                 "attributes": {
                     "Region_Name": region_name,
-                    "parentglobalid": globalid,
+                    "parentglobalid": st.session_state.get("apex_globalid", None),
                 },
                 "geometry": geom
             })
@@ -738,7 +738,7 @@ def geography_payload(globalid: str, name: str):
                 "attributes": {
                     "Bor_FIPS": fips,
                     "Bor_Name": borough_name,
-                    "parentglobalid": globalid,
+                    "parentglobalid": st.session_state.get("apex_globalid", None),
                 },
                 "geometry": geom
             })
@@ -769,7 +769,7 @@ def geography_payload(globalid: str, name: str):
             payload["adds"].append({
                 "attributes": {
                     "Senate_District_Name": district,
-                    "parentglobalid": globalid,
+                    "parentglobalid": st.session_state.get("apex_globalid", None),
                 },
                 "geometry": geom
             })
@@ -805,7 +805,7 @@ def geography_payload(globalid: str, name: str):
                     "House_District_Num": house_num,
                     "House_District_Name": house_name,
                     "House_Senate_District": senate,
-                    "parentglobalid": globalid,
+                    "parentglobalid": st.session_state.get("apex_globalid", None),
                 },
                 "geometry": geom
             })
@@ -838,7 +838,7 @@ def geography_payload(globalid: str, name: str):
                 "attributes": {
                     "Impacted_Route_ID": route_id,
                     "Impacted_Route_Name": route_name,
-                    "parentglobalid": globalid,
+                    "parentglobalid": st.session_state.get("apex_globalid", None),
                 },
                 "geometry": geom
             })
@@ -849,3 +849,124 @@ def geography_payload(globalid: str, name: str):
         return None
     else:
         return clean_payload(payload)
+    
+
+def traffic_impact_payload():
+    
+    
+    
+    try:
+        # Build payload with .get() and default None
+        payload = {
+            "adds": [
+                {
+                    "attributes": {
+                        "Traffic_Impact_AWP_Proj_Name": st.session_state.get("awp_proj_name", None),
+                        "Traffic_Impact_Proj_Name": st.session_state.get("proj_name", None),
+                        "Traffic_Impact_New_Card": "Yes",
+                        "parentglobalid": st.session_state.get("apex_globalid", None),
+                    },
+                    "geometry": {
+                        
+                    }
+                }
+            ]
+        }
+        return clean_payload(payload)
+    except Exception as e:
+        # Bubble up error so caller can handle with st.error
+        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
+
+
+
+
+def traffic_impact_start_point_payload():
+    try:
+        # Build payload with .get() and default None
+        payload = {
+            "adds": [
+                {
+                    "attributes": {
+                        "parentglobalid": st.session_state.get("apex_globalid", None),
+                    },
+                    "geometry": {
+                    }
+                }
+            ]
+        }
+        return clean_payload(payload)
+    except Exception as e:
+        # Bubble up error so caller can handle with st.error
+        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
+    
+
+
+
+def traffic_impact_end_point_payload():
+    try:
+        # Build payload with .get() and default None
+        payload = {
+            "adds": [
+                {
+                    "attributes": {
+                        "parentglobalid": st.session_state.get("apex_globalid", None),
+                    },
+                    "geometry": {
+                    }
+                }
+            ]
+        }
+        return clean_payload(payload)
+    except Exception as e:
+        # Bubble up error so caller can handle with st.error
+        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
+    
+
+
+
+def awp_apex_cy_payload():
+    # Locate OBJECTID
+    object_id = get_objectids_by_identifier(
+        url=st.session_state['aashtoware_url'],
+        layer=0,
+        id_field="GlobalID",
+        id_value=st.session_state.get("awp_globalid")
+    )
+
+    # Read session values
+    cy_awp = st.session_state.get("awp_selected_construction_years")
+    cy_year = st.session_state.get("construction_year")
+
+    # --- Normalize existing AWP years into a list ---
+    if isinstance(cy_awp, str):
+        cy_list = [v.strip() for v in cy_awp.split(",") if v.strip()]
+    elif isinstance(cy_awp, list):
+        cy_list = list(cy_awp)
+    else:
+        cy_list = []
+
+    # --- Add the new selected year if it is not blank and not already included ---
+    if cy_year and cy_year not in cy_list:
+        cy_list.append(cy_year)
+
+    # Back to comma‑separated string
+    cy_list_str = ", ".join(cy_list)
+
+    # --- Build final payload ---
+    try:
+        payload = {
+            "updates": [
+                {
+                    "attributes": {
+                        "OBJECTID": object_id,
+                        "ConstructionYears": cy_list_str
+                    },
+                    "geometry": {}
+                }
+            ]
+        }
+        return clean_payload(payload)
+
+    except Exception as e:
+        raise RuntimeError(f"Error building Construction Years payload: {e}")
+
