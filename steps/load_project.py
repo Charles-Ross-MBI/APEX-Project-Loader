@@ -272,7 +272,7 @@ def load_project_apex() -> None:
         st.success("LOAD GEOGRAPHIES: SUCCESS ✅")
 
     # # -------------------------------------------------------------------------
-    # # STEP 5: LOAD TRAFFIC IMPACT CARD (NOT SILENT)
+    # # STEP 5: LOAD TRAFFIC IMPACT CARD
     # # -------------------------------------------------------------------------
     # with spinner_container, st.spinner("Loading Traffic Impact Card to APEX..."):
     #     step5_ok = True

@@ -53,8 +53,6 @@ Notes:
 
 import os
 import streamlit as st
-from agol.agol_util import select_record
-
 
 # =============================================================================
 # ENTRYPOINT: SESSION STATE INITIALIZATION
@@ -215,7 +213,7 @@ def init_session_state():
     # AGOL URLS
     # -------------------------------------------------------------------------
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_430b95b74403411c80494695f7825b65/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_6eb98b67888d4ffbadd109872cce65a9/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
@@ -233,15 +231,13 @@ def init_session_state():
         "sites_layer": 1,
         "routes_layer": 2,
         "boundaries_layer": 3,
-        "impact_comms_layer": 4,
-        "region_layer": 5,
-        "bor_layer": 6,
-        "senate_layer": 7,
-        "house_layer": 8,
-        "impact_routes_layer": 9,
-        "traffic_impacts": 10,
-        "start_points": 11,
-        "end_points": 12
+        "bop_eop_layer": 4,
+        "impact_comms_layer": 5,
+        "region_layer": 6,
+        "bor_layer": 7,
+        "senate_layer": 8,
+        "house_layer": 9,
+        "impact_routes_layer": 10
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
