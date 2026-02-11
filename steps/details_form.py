@@ -1075,7 +1075,6 @@ def _render_original_form(is_awp: bool):
                 st.session_state["details_complete"] = True
                 st.session_state["project_details"] = required_fields
                 st.session_state["details_type"] = st.session_state["current_option"]
-
                 
                 # Fields to format ONLY in UI mode (is_awp == False)
                 UI_TRANSFORM_MAP = {

@@ -368,7 +368,7 @@ def load_project_apex() -> None:
     # -------------------------------------------------------------------------
     # STEP 6 (SILENT): AWP APEX CY UPDATE
     # -------------------------------------------------------------------------
-    if st.session_state.get("info_option", None) == 'AASHTOWare Database':
+    if st.session_state.get("details_type", None) == 'AASHTOWare Database':
         try:
             payload_awp_cy = awp_apex_cy_payload()
             cy_layer = st.session_state["contracts_layer"]  # adjust if needed
@@ -475,5 +475,7 @@ def load_project_apex() -> None:
             """,
             unsafe_allow_html=True,
         )
+       
+
 
     
