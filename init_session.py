@@ -213,7 +213,7 @@ def init_session_state():
     # AGOL URLS
     # -------------------------------------------------------------------------
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_ed21872369654fcc8d489cd1699c1f42/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_05cecd182edb43f0b0733f55b4d862b5/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
@@ -237,7 +237,11 @@ def init_session_state():
         "bor_layer": 7,
         "senate_layer": 8,
         "house_layer": 9,
-        "impact_routes_layer": 10
+        "impact_routes_layer": 10,
+        'ti_card_layer': 11,
+        'ti_route_layer': 12,
+        'ti_start_layer': 13,
+        'ti_end_layer': 14
     }
 
     # Geography intersect services (used by district_queries / geography payloads)
@@ -313,7 +317,7 @@ def init_session_state():
         "proj_name": "awp_PublicProjectName",
         "phase": "awp_ProjectPhase",
         "iris": "IRIS",
-        "stip": "",
+        "stip": "STIP_ID",
         "fed_proj_num": "FederalProjectNumber",
         "fund_type": "FundingType",
         "proj_prac": "ProjectPractice",
@@ -327,8 +331,6 @@ def init_session_state():
         "amount_paid_to_date": "AmountPaidToDate",
         "tenadd": "TentativeAdvertisingDate",
         "awp_proj_desc": "AASTOWARE_Description",
-        'route_id': "",
-        'route_name': "",
         "contact_name":"ContactName",
         "contact_email":"ContactEmail",
         "contact_phone":"ContactPhone",

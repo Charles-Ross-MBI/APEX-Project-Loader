@@ -854,10 +854,7 @@ def geography_payload(name: str):
         return clean_payload(payload)
     
 
-def traffic_impact_payload():
-    
-    
-    
+def ti_card_payload():
     try:
         # Build payload with .get() and default None
         payload = {
@@ -879,11 +876,32 @@ def traffic_impact_payload():
     except Exception as e:
         # Bubble up error so caller can handle with st.error
         raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
+    
+
+
+def ti_route_payload():
+    try:
+        # Build payload with .get() and default None
+        payload = {
+            "adds": [
+                {
+                    "attributes": {
+                        "parentglobalid": st.session_state.get("apex_globalid", None),
+                    },
+                    "geometry": {
+                    }
+                }
+            ]
+        }
+        return clean_payload(payload)
+    except Exception as e:
+        # Bubble up error so caller can handle with st.error
+        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
 
 
 
 
-def traffic_impact_start_point_payload():
+def ti_start_payload():
     try:
         # Build payload with .get() and default None
         payload = {
@@ -905,7 +923,7 @@ def traffic_impact_start_point_payload():
 
 
 
-def traffic_impact_end_point_payload():
+def ti_end_payload():
     try:
         # Build payload with .get() and default None
         payload = {
