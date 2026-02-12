@@ -213,7 +213,7 @@ def init_session_state():
     # AGOL URLS
     # -------------------------------------------------------------------------
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_f9b9d8501c1648349f674c00ea4f4b23/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_ed21872369654fcc8d489cd1699c1f42/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
@@ -327,9 +327,11 @@ def init_session_state():
         "amount_paid_to_date": "AmountPaidToDate",
         "tenadd": "TentativeAdvertisingDate",
         "awp_proj_desc": "AASTOWARE_Description",
-        "awp_contact_name":"ContactName",
-        "awp_contact_email":"ContactEmail",
-        "awp_contact_phone":"ContactPhone",
+        'route_id': "",
+        'route_name': "",
+        "contact_name":"ContactName",
+        "contact_email":"ContactEmail",
+        "contact_phone":"ContactPhone",
         "proj_desc": "PublicDescription",
         "proj_web": "ProjectURL",
     }

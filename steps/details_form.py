@@ -406,11 +406,15 @@ _PERSISTED_KEYS = [
     "proj_desc",
     "proj_web",
 
+    #Route ID/Name
+    'route_id',
+    'route_name',
+
     # Contact (new/current)
-    "awp_contact_name",
-    "awp_contact_role",
-    "awp_contact_email",
-    "awp_contact_phone",
+    "contact_name",
+    "contact_role",
+    "contact_email",
+    "contact_phone",
 
     # Impacted communities (legacy mirror keys used downstream)
     "impact_comm",
@@ -965,47 +969,48 @@ def _render_original_form(is_awp: bool):
         st.write("")
         st.write("")
 
+
         # ---------------------------------------------------------------------
         # SECTION 7: CONTACT
         # ---------------------------------------------------------------------
         st.markdown("<h5>7. CONTACT</h4>", unsafe_allow_html=True)
         if is_awp:
             ro_widget(
-                key="awp_contact_name",
+                key="acontact_name",
                 label="Contact",
-                value=fmt_string(val(AWP_FIELDS['awp_contact_name']))
+                value=fmt_string(val(AWP_FIELDS['contact_name']))
             )
             col18, col19 = st.columns(2)
             with col18:
                 ro_widget(
-                    key="awp_contact_email",
+                    key="contact_email",
                     label="Email",
-                    value=fmt_string(val(AWP_FIELDS['awp_contact_email']))
+                    value=fmt_string(val(AWP_FIELDS['contact_email']))
                 )
             with col19:
                 ro_widget(
-                    key="awp_contact_phone",
+                    key="contact_phone",
                     label="Phone",
-                    value=fmt_string(val(AWP_FIELDS['awp_contact_phone']))
+                    value=fmt_string(val(AWP_FIELDS['contact_phone']))
                 )
         else:
-            st.session_state["awp_contact_name"] = st.text_input(
+            st.session_state["contact_name"] = st.text_input(
                 label="Name",
-                key=widget_key("awp_contact_name", version, is_awp),
-                value=st.session_state.get("awp_sel_contact_name", ''),
+                key=widget_key("contact_name", version, is_awp),
+                value=st.session_state.get("contact_name", ''),
             )
             col18, col19 = st.columns(2)
             with col18:
-                st.session_state["awp_contact_email"] = st.text_input(
+                st.session_state["contact_email"] = st.text_input(
                     label="Email",
                     key=widget_key("awp_contact_email", version, is_awp),
-                    value=st.session_state.get("awp_contact_email", ''),
+                    value=st.session_state.get("contact_email", ''),
                 )
             with col19:
-                st.session_state["awp_contact_phone"] = st.text_input(
+                st.session_state["contact_phone"] = st.text_input(
                     label="Phone",
-                    key=widget_key("awp_contact_phone", version, is_awp),
-                    value=st.session_state.get("awp_contact_phone", ''),
+                    key=widget_key("contact_phone", version, is_awp),
+                    value=st.session_state.get("contact_phone", ''),
                 )
 
         st.write("")
