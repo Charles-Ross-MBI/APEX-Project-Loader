@@ -213,7 +213,7 @@ def init_session_state():
     # AGOL URLS
     # -------------------------------------------------------------------------
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_05cecd182edb43f0b0733f55b4d862b5/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_b6d445506c3e490a9bafa8335f7da70c/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
