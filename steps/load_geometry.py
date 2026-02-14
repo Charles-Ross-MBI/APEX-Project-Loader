@@ -329,7 +329,6 @@ def load_geometry_app():
     # -------------------------------------------------------------------------
     show_awp_point_option = False
     show_awp_route_option = False
-
     points = st.session_state.get("awp_geometry_points") or {}
 
     # -------------------------------------------------------------------------
@@ -482,4 +481,3 @@ def load_geometry_app():
     elif project_type.startswith("Boundary") and boundary_val is not None and has_any_geography:
         _render_geographies_expander(show_routes=True)
 
-    st.write("")

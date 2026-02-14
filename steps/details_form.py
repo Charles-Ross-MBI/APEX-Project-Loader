@@ -168,7 +168,7 @@ def impacted_comms_select(is_awp: bool = False):
 # FORM SUBSECTION: AASHTOWARE PROJECT SELECTOR (DROPDOWN + STATE SYNC)
 # =============================================================================
 # - Pulls AASHTOWare project rows from the AWP FeatureServer via get_multiple_fields()
-# - Builds label <-> GlobalID mappings for user-friendly selection + authoritative lookup
+# - Builds label <-> Id mappings for user-friendly selection + authoritative lookup
 # - Uses a versioned widget key (form_version) to prevent Streamlit widget state bleed
 # - Syncs the selectbox display to an existing awp_guid / aashto_id when returning to the page
 # - on_change callback updates ONLY selection state (record loading is handled elsewhere)
@@ -197,25 +197,25 @@ def aashtoware_project():
     projects = get_multiple_fields(
         aashtoware,
         st.session_state["contracts_layer"],
-        ["ProjectName", "IRIS", "ConstructionYears", "GlobalID"]
+        ["ProjectName", "IRIS", "ConstructionYears", "Id"]
     ) or []
 
-    # NEW: lookup for existing ConstructionYears by GlobalID (from same pull)
+    # NEW: lookup for existing ConstructionYears by Id (from same pull)
     gid_to_cy = {
-        p.get("GlobalID"): _format_construction_years(p.get("ConstructionYears"))
+        p.get("Id"): _format_construction_years(p.get("ConstructionYears"))
         for p in projects
-        if p.get("GlobalID")
+        if p.get("Id")
     }
 
     
     # Sort projects by ProjectName (case-insensitive), blank names go last
     projects_sorted = sorted(
-        (p for p in projects if p.get("GlobalID")),
+        (p for p in projects if p.get("Id")),
         key=lambda p: ((p.get("ProjectName") or "").strip().lower() == "", (p.get("ProjectName") or "").strip().lower())
     )
 
     label_to_gid = {
-        f"{p.get('IRIS', '')} – {p.get('ProjectName', '')}": p.get("GlobalID")
+        f"{p.get('Id', '')} – {p.get('ProjectName', '')}": p.get("Id")
         for p in projects_sorted
     }
 
@@ -354,7 +354,7 @@ def aashtoware_project():
             st.session_state[k] = "" if k not in ["award_date", "antcipated_start", "anticipated_end", "tenadd"] else None
 
         # Load full AWP record
-        record = select_record(aashtoware, 0, "GlobalID", selected_gid)
+        record = select_record(aashtoware, 0, "Id", selected_gid)
         if record and "attributes" in record[0]:
             attrs = record[0]["attributes"]
             for k, v in attrs.items():
@@ -1098,9 +1098,15 @@ def _render_original_form(is_awp: bool):
                             except Exception:
                                 pass
 
-                #Select Geometry Points if AASHTOWARE Project
+                # Select Geometry Points if AASHTOWARE Project
                 if is_awp:
-                    st.session_state["awp_geometry_points"] = aashtoware_geometry(st.session_state['awp_id'])
+                    if "awp_geometry_points" not in st.session_state:
+                        awp_id = st.session_state.get("awp_id")
+                        if not awp_id:
+                            st.error("AWP ID is missing in session_state['awp_id'].")
+                        else:
+                            # Fetch geometry points once and store
+                            st.session_state["awp_geometry_points"] = aashtoware_geometry(awp_id) or {}
 
             # Snapshot everything for this source so it persists across page navigation
             current_source = st.session_state.get("info_option")

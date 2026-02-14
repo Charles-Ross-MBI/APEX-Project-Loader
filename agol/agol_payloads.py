@@ -59,6 +59,7 @@ import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
 import datetime
 from agol.agol_util import select_record, get_objectids_by_identifier
+from util.geospatial_util import GeometryUtil
 
 # =============================================================================
 # PAYLOAD CLEANING / NORMALIZATION HELPERS
@@ -154,139 +155,6 @@ def str_to_int(value):
     return value
 
 
-def _average_centers(centers):
-    """
-    Average a list of (lon, lat) pairs into a single (lon, lat) center.
-
-    Raises:
-        ValueError: if centers is empty.
-    """
-    if not centers:
-        raise ValueError("No centers provided.")
-    xs = [c[0] for c in centers]
-    ys = [c[1] for c in centers]
-    return (sum(xs) / len(xs), sum(ys) / len(ys))  # (lon, lat)
-
-
-# =============================================================================
-# GEOMETRY CENTER COMPUTATION
-# =============================================================================
-# These helpers compute representative centers used for:
-# - Project point geometry (for map display / indexing)
-# - Consistent location when an input geometry is multi-part
-#
-# IMPORTANT:
-# - Input coordinate convention is treated as [lat, lon] in several places.
-# - Returns are (lon, lat) to match ArcGIS x/y expectation.
-# =============================================================================
-def get_point_center(points):
-    """
-    Compute a representative center for point geometry input.
-
-    Accepted input shapes:
-        - A single point: [lat, lon]
-        - A list of points: [[lat, lon], ...]
-        - A list of point groups: [[[lat, lon], ...], ...]
-
-    Returns:
-        (lon, lat): tuple
-            A single center point in ArcGIS-friendly order.
-    """
-    # Normalize to flat list of [lat, lon]
-    flat_points = []
-
-    # Single point [lat, lon]
-    if isinstance(points, (list, tuple)) and len(points) == 2 and \
-            all(isinstance(x, (int, float)) for x in points):
-        flat_points.append(points)
-    else:
-        # List or nested list
-        for item in points:
-            if isinstance(item, (list, tuple)) and len(item) == 2:
-                flat_points.append(item)
-            elif isinstance(item, (list, tuple)):
-                for pt in item:
-                    if isinstance(pt, (list, tuple)) and len(pt) == 2:
-                        flat_points.append(pt)
-
-    if not flat_points:
-        raise ValueError("No valid point data found.")
-
-    # If only one point, just return it (as lon, lat)
-    if len(flat_points) == 1:
-        lat, lon = flat_points[0]
-        return (float(lon), float(lat))
-
-    # Multiple points → average center
-    lats = [float(pt[0]) for pt in flat_points]
-    lons = [float(pt[1]) for pt in flat_points]
-    center_lat = sum(lats) / len(lats)
-    center_lon = sum(lons) / len(lons)
-    return (center_lon, center_lat)  # (lon, lat)
-
-
-def get_line_center(line_geom):
-    """
-    Compute a representative center for line geometry input.
-
-    Accepted input shapes:
-        - A single LineString or list of coordinates
-        - A list of LineStrings / coordinate lists
-
-    Returns:
-        (lon, lat): tuple
-            Center point (or "center of centers" for multi-part lines).
-    """
-    def _center_single_line(g):
-        if isinstance(g, list):
-            g = LineString(g)
-        if not isinstance(g, LineString):
-            raise ValueError("Geometry must be a LineString or list of coordinates")
-        midpoint_distance = g.length / 2.0
-        center = g.interpolate(midpoint_distance)
-        return (center.x, center.y)  # (lon, lat)
-
-    # Multiple geometries
-    if isinstance(line_geom, list) and any(isinstance(x, (list, LineString)) for x in line_geom):
-        centers = []
-        for g in line_geom:
-            centers.append(_center_single_line(g))
-        return _average_centers(centers)
-
-    # Single geometry
-    return _center_single_line(line_geom)
-
-
-def get_polygon_center(poly_geom):
-    """
-    Compute a representative center for polygon geometry input.
-
-    Accepted input shapes:
-        - A single Polygon or list of coordinates
-        - A list of Polygons / coordinate lists
-
-    Returns:
-        (lon, lat): tuple
-            Centroid (or "center of centers" for multi-part polygons).
-    """
-    def _center_single_polygon(g):
-        if isinstance(g, list):
-            g = Polygon(g)
-        if not isinstance(g, Polygon):
-            raise ValueError("Geometry must be a Polygon or list of coordinates")
-        c = g.centroid
-        return (c.x, c.y)  # (lon, lat)
-
-    # Multiple geometries
-    if isinstance(poly_geom, list) and any(isinstance(x, (list, Polygon)) for x in poly_geom):
-        centers = []
-        for g in poly_geom:
-            centers.append(_center_single_polygon(g))
-        return _average_centers(centers)
-
-    # Single geometry
-    return _center_single_polygon(poly_geom)
-
 
 def clean_payloads(payloads: dict) -> dict:
     """
@@ -332,19 +200,22 @@ def clean_payloads(payloads: dict) -> dict:
 # =============================================================================
 def project_payload():
     try:
+        # Set GeometryUTIL
+        geom = GeometryUtil(epsg=4326)
+
         # Determine center based on selected geometry
         center = None
         if st.session_state.get("selected_point"):
             pt = st.session_state["selected_point"]
-            center = get_point_center(pt)
+            st.session_state['center'] = geom.center(pt, 'point')
             proj_type = "Site"
         elif st.session_state.get("selected_route"):
             route = st.session_state["selected_route"]
-            center = get_line_center(route)
+            st.session_state['center'] =  geom.center(route, 'line')
             proj_type = "Route"
         elif st.session_state.get("selected_boundary"):
             boundary = st.session_state["selected_boundary"]
-            center = get_polygon_center(boundary)
+            st.session_state['center'] = geom.center(boundary, 'polygon')
             proj_type = "Boundary"
 
         # Build payload with .get() and default None
@@ -392,12 +263,12 @@ def project_payload():
                         "Proj_Web": st.session_state.get("proj_web", None),
                         'Submitted_By': st.session_state.get('submitted_by', None),
                         "Database_Status": "Review: Awaiting Review",
-                        "AWP_GUID": st.session_state.get("awp_globalid", None),
+                        "AWP_Contract_ID": st.session_state.get("awp_guid", None),
                         "AWP_Update": st.session_state.get("awp_update", None)
                     },
                     "geometry": {
-                        "x": center[0] if center else None,  # longitude
-                        "y": center[1] if center else None,  # latitude
+                        "x": st.session_state['center'][0] if st.session_state['center'] else None,  # longitude
+                        "y": st.session_state['center'][1] if st.session_state['center'] else None,  # latitude
                         "spatialReference": {"wkid": 4326}
                     }
                 }
@@ -856,6 +727,19 @@ def geography_payload(name: str):
 
 def ti_card_payload():
     try:
+        # Set GeometryUTIL
+        geom = GeometryUtil(epsg=4326)
+
+        # Determine center based on selected geometry
+        if st.session_state.get("selected_point"):
+            pt = st.session_state["selected_point"]
+            st.session_state['buffer'] = geom.buffer(pt, 'point', distance_m=.005)
+        elif st.session_state.get("selected_route"):
+            route = st.session_state["selected_route"]
+            st.session_state['buffer'] =  geom.buffer(route, 'line', distance_m=.005)
+        elif st.session_state.get("selected_boundary"):
+            boundary = st.session_state["selected_boundary"]
+            st.session_state['buffer'] = geom.buffer(boundary, 'polygon', distance_m=.005)
         # Build payload with .get() and default None
         payload = {
             "adds": [
@@ -866,74 +750,7 @@ def ti_card_payload():
                         "Traffic_Impact_New_Card": "Yes",
                         "parentglobalid": st.session_state.get("apex_globalid", None),
                     },
-                    "geometry": {
-                        
-                    }
-                }
-            ]
-        }
-        return clean_payload(payload)
-    except Exception as e:
-        # Bubble up error so caller can handle with st.error
-        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
-    
-
-
-def ti_route_payload():
-    try:
-        # Build payload with .get() and default None
-        payload = {
-            "adds": [
-                {
-                    "attributes": {
-                        "parentglobalid": st.session_state.get("apex_globalid", None),
-                    },
-                    "geometry": {
-                    }
-                }
-            ]
-        }
-        return clean_payload(payload)
-    except Exception as e:
-        # Bubble up error so caller can handle with st.error
-        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
-
-
-
-
-def ti_start_payload():
-    try:
-        # Build payload with .get() and default None
-        payload = {
-            "adds": [
-                {
-                    "attributes": {
-                        "parentglobalid": st.session_state.get("apex_globalid", None),
-                    },
-                    "geometry": {
-                    }
-                }
-            ]
-        }
-        return clean_payload(payload)
-    except Exception as e:
-        # Bubble up error so caller can handle with st.error
-        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
-    
-
-
-
-def ti_end_payload():
-    try:
-        # Build payload with .get() and default None
-        payload = {
-            "adds": [
-                {
-                    "attributes": {
-                        "parentglobalid": st.session_state.get("apex_globalid", None),
-                    },
-                    "geometry": {
-                    }
+                    "geometry": st.session_state['buffer']  #Package already contains rings and spatial reference
                 }
             ]
         }
@@ -950,8 +767,8 @@ def awp_apex_cy_payload():
     object_id = get_objectids_by_identifier(
         url=st.session_state['aashtoware_url'],
         layer=0,
-        id_field="GlobalID",
-        id_value=st.session_state.get("awp_globalid")
+        id_field="Id",
+        id_value=st.session_state.get("awp_guid")
     )
 
     # Read session values
@@ -981,13 +798,12 @@ def awp_apex_cy_payload():
                     "attributes": {
                         "OBJECTID": object_id,
                         "ConstructionYears": cy_list_str
-                    },
-                    "geometry": {}
+                    }
                 }
             ]
         }
+
         return clean_payload(payload)
 
     except Exception as e:
         raise RuntimeError(f"Error building Construction Years payload: {e}")
-

@@ -267,6 +267,40 @@ def fmt_double(val, mode: str = "float", *, decimals: int = 2, thousands: bool =
 
 
 
+def fmt_phone(input_value, default_area=907):
+    """
+    Format a phone-like input into "(AAA) BBB-CCCC".
+
+    Rules:
+    - Remove all non-digits
+    - If 11 digits and starts with '1', drop the leading '1' (US/Canada)
+    - If exactly 7 digits, prepend default_area (default: 907)
+    - If not exactly 10 digits after normalization, return None
+    """
+    if input_value is None:
+        return None
+
+    digits = re.sub(r"\D+", "", str(input_value))
+
+    # Handle leading country code '1'
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+
+    # Local 7-digit -> add area code
+    if len(digits) == 7:
+        digits = f"{default_area}{digits}"
+
+    # Must be 10 digits now
+    if len(digits) != 10:
+        return None
+
+    area, prefix, line = digits[:3], digits[3:6], digits[6:]
+    return f"({area}) {prefix}-{line}"
+
+
+
+
+
 
 
 

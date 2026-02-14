@@ -99,13 +99,14 @@ def init_session_state():
         "project_category": None,
         "details_complete": False,
         "duplicate_confirmed": False,
-        "awp_geometry_points": {},
         "awp_dcml_mid_latitude": None,
         "awp_dcml_mid_longitude": None,
         "awp_dcml_bop_latitude": None,
         "awp_dcml_bop_longitude": None,
         "awp_dcml_eop_latitude": None,
         "awp_dcml_eop_longitude": None,
+        "ti_guid": None,
+        'center': None
     }
 
     # Seed missing keys (do not overwrite user/session modifications)
@@ -213,7 +214,7 @@ def init_session_state():
     # AGOL URLS
     # -------------------------------------------------------------------------
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_b6d445506c3e490a9bafa8335f7da70c/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_62a5fb52fb4445419498a76c214d7dc0/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
@@ -313,6 +314,7 @@ def init_session_state():
     # AWP_FIELDS provides a single place to map UI/session keys to the
     # AASHTOWare-provided session keys.
     AWP_FIELDS = {
+        'awp_guid' : "Id",
         "awp_proj_name": "ProjectName",
         "proj_name": "awp_PublicProjectName",
         "phase": "awp_ProjectPhase",
