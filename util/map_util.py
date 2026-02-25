@@ -77,52 +77,312 @@ def add_small_geocoder(fmap, position: str = "topright", width_px: int = 120, fo
 
 
 
-
-def geometry_to_folium(geom, **style):
+def geometry_to_folium(
+    geom,
+    *,
+    # Line & polygon style
+    color = "#3388ff",
+    weight = 3,
+    opacity = 1.0,
+    dash_array = None,
+    fill = True,
+    fill_color = None,
+    fill_opacity = 0.2,
+    # Interactivity
+    tooltip = None,
+    popup = None,
+    # Marker styling
+    icon = None,   # e.g., folium.Icon(color="blue"), applies to folium.Marker only
+    # NEW: Explicit feature hint to disambiguate list-of-points
+    feature_type = None  # "point" | "multipoint" | "line" | "linestring" | "polyline" | "polygon" | None(auto)
+):
     """
-    Convert ArcGIS-style geometry (single or list) into Folium layers.
-    Supports:
+    Convert ArcGIS-style or raw coordinate-array geometry into Folium layers.
+
+    Supported inputs:
       - Point:      {"x": lon, "y": lat}
-      - Multipoint: {"points": [[lon,lat], ...]}
-      - Polyline:   {"paths": [[[lon,lat], ...]]}
-      - Polygon:    {"rings": [[[lon,lat], ...]]}
-      - List of any of the above
+      - Multipoint: {"points": [[lon, lat], ...]}
+      - Polyline:   {"paths":  [ [[lon, lat], ...], ... ]}
+      - Polygon:    {"rings":  [ [[lon, lat], ...], ... ]} (outer + holes)
+      - List forms (no keys):
+          * Single path:    [[lon, lat], ...]                     -> Polyline
+          * Multi-path:     [ [[lon,lat],...], [[lon,lat],...] ]  -> Multiple polylines
+          * Single ring:    [[lon, lat], ... (closed)]            -> Polygon
+          * Multi-ring:     [ [[lon,lat],...], [[lon,lat],...] ]  -> Polygon (outer + holes)
+      - Collections: [ geom1, geom2, ... ] -> FeatureGroup
+
+    Notes:
+      - Assumes [lon, lat] in WGS84. Converts to [lat, lon] for Folium where required.
+      - Polygons with holes are emitted as GeoJSON (Folium.Polygon can't represent holes).
+      - Pass `feature_type` to explicitly interpret ambiguous lists (e.g., points-as-line).
+        Examples:
+          * feature_type="line"      -> [[lon,lat], [lon,lat], ...] drawn as PolyLine
+          * feature_type="point"     -> list of points drawn as markers (multipoint)
+          * feature_type="polygon"   -> [[lon,lat], ...] drawn as ring (will be closed if needed)
     """
 
-    # If it's a list of geometries → wrap into FeatureGroup
-    if isinstance(geom, list):
-        group = folium.FeatureGroup()
+    def is_num_pair(p):
+        return isinstance(p, (list, tuple)) and len(p) == 2 and all(isinstance(v, (int, float)) for v in p)
+
+    def to_latlon(seq):
+        # Convert [[lon,lat], ...] -> [[lat,lon], ...]
+        return [[p[1], p[0]] for p in seq]
+
+    def ensure_closed(ring):
+        # Ensure ring is closed for polygon consistency
+        return ring if len(ring) > 0 and ring[0] == ring[-1] else ring + [ring[0]]
+
+    def polygon_geojson_from_rings(rings):
+        """
+        Build a GeoJSON Polygon (outer + holes).
+        Coordinates remain [lon, lat] as per GeoJSON spec.
+        """
+        if not rings:
+            raise ValueError("Polygon requires at least one ring")
+        rings_closed = [ensure_closed(r) for r in rings]
+        return {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": rings_closed
+            },
+            "properties": {}
+        }
+
+    # Style application helpers
+    def _apply_common_bindings(layer):
+        if tooltip is not None:
+            try:
+                layer.add_child(folium.Tooltip(tooltip))
+            except Exception:
+                pass
+        if popup is not None:
+            try:
+                layer.add_child(folium.Popup(popup))
+            except Exception:
+                pass
+        return layer
+
+    def _marker(lat, lon):
+        # Apply icon if provided
+        mk = folium.Marker([lat, lon], icon=icon if icon is not None else None)
+        return _apply_common_bindings(mk)
+
+    def _polyline(**kw):
+        layer = folium.PolyLine(**kw)
+        return _apply_common_bindings(layer)
+
+    def _polygon_simple(latlon, **_):
+        # Simple polygons (no holes). Used when not using GeoJson.
+        layer = folium.Polygon(
+            locations=latlon,
+            color=color,
+            weight=weight,
+            opacity=opacity,
+            dash_array=dash_array,
+            fill=fill,
+            fill_color=(fill_color or color),
+            fill_opacity=fill_opacity
+        )
+        return _apply_common_bindings(layer)
+
+    def _polygon_geojson(gj_feature):
+        # Style function for GeoJson to mirror the explicit style args
+        def _style_fn(_feature):
+            return {
+                "color": color,
+                "weight": weight,
+                "opacity": opacity,
+                "dashArray": dash_array if isinstance(dash_array, str)
+                    else (",".join(map(str, dash_array)) if dash_array else None),
+                "fill": fill,
+                "fillColor": (fill_color or color),
+                "fillOpacity": fill_opacity,
+            }
+        layer = folium.GeoJson(gj_feature, style_function=_style_fn)
+        return _apply_common_bindings(layer)
+
+    # ---------- Optional explicit interpretation using feature_type ----------
+    ft = (feature_type or "").strip().lower() if isinstance(feature_type, str) else None
+
+    # ---- COLLECTION HANDLING (top-level list) ----
+    if isinstance(geom, list) and len(geom) > 0:
+        first = geom[0]
+
+        # If a feature_type is provided, enforce it for list inputs
+        if ft in ("point", "multipoint", "line", "linestring", "polyline", "polygon"):
+
+            # Explicit POINT/MULTIPOINT: draw markers (single or multiple)
+            if ft in ("point", "multipoint") and is_num_pair(first):
+                if len(geom) == 1:
+                    lon, lat = geom[0]
+                    return _marker(lat, lon)
+                # Multiple points -> FeatureGroup of markers
+                fg = folium.FeatureGroup()
+                for lon, lat in (p for p in geom if is_num_pair(p)):
+                    _marker(lat, lon).add_to(fg)
+                return _apply_common_bindings(fg)
+
+            # Explicit LINE: treat as single path (or multi-path if nested)
+            if ft in ("line", "linestring", "polyline"):
+                # Single path form: [[lon,lat], ...]
+                if is_num_pair(first):
+                    if len(geom) == 1:
+                        lon, lat = geom[0]
+                        return _marker(lat, lon)
+                    return _polyline(
+                        locations=to_latlon(geom),
+                        color=color,
+                        weight=weight,
+                        opacity=opacity,
+                        dash_array=dash_array
+                    )
+                # Multi-path form: [ [[lon,lat],...], [[lon,lat],...] ]
+                if isinstance(first, list) and len(first) > 0 and is_num_pair(first[0]):
+                    fg = folium.FeatureGroup()
+                    for part in geom:
+                        if not part:
+                            continue
+                        if len(part) == 1 and is_num_pair(part[0]):
+                            lon, lat = part[0]
+                            _marker(lat, lon).add_to(fg)
+                        else:
+                            _polyline(
+                                locations=to_latlon(part),
+                                color=color,
+                                weight=weight,
+                                opacity=opacity,
+                                dash_array=dash_array
+                            ).add_to(fg)
+                    return _apply_common_bindings(fg)
+
+            # Explicit POLYGON: treat as ring(s)
+            if ft == "polygon":
+                # Single ring form: [[lon,lat], ...]
+                if is_num_pair(first):
+                    ring = ensure_closed(geom)
+                    gj = polygon_geojson_from_rings([ring])
+                    return _polygon_geojson(gj)
+                # Multi-ring form: [ [[lon,lat],...], [[lon,lat],...] ]
+                if isinstance(first, list) and len(first) > 0 and is_num_pair(first[0]):
+                    rings = [ensure_closed(r) for r in geom if r]
+                    gj = polygon_geojson_from_rings(rings)
+                    return _polygon_geojson(gj)
+
+            # If feature_type was provided but input didn't match expected patterns,
+            # fall back to auto-detection below.
+
+        # ---------- AUTO-DETECTION (original behavior) ----------
+
+        # Case: Single path/ring or possible single coordinate [[lon,lat], ...]
+        if is_num_pair(first):
+            # If it's exactly one coordinate, render as Marker
+            if len(geom) == 1:
+                lon, lat = geom[0]
+                return _marker(lat, lon)
+
+            is_closed = len(geom) >= 4 and geom[0] == geom[-1]
+            if is_closed:
+                gj = polygon_geojson_from_rings([geom])
+                return _polygon_geojson(gj)
+            else:
+                return _polyline(
+                    locations=to_latlon(geom),
+                    color=color,
+                    weight=weight,
+                    opacity=opacity,
+                    dash_array=dash_array
+                )
+
+        # Case: Multi-part [ [[lon,lat],...], [[lon,lat],...] ]
+        if isinstance(first, list) and len(first) > 0 and is_num_pair(first[0]):
+            first_is_closed = len(first) >= 4 and first[0] == first[-1]
+            if first_is_closed:
+                # Treat as polygon with holes
+                gj = polygon_geojson_from_rings(geom)
+                return _polygon_geojson(gj)
+            else:
+                # Multiple polylines -> FeatureGroup of separate lines
+                fg = folium.FeatureGroup()
+                for part in geom:
+                    if not part:
+                        continue
+                    if len(part) == 1 and is_num_pair(part[0]):
+                        lon, lat = part[0]
+                        _marker(lat, lon).add_to(fg)
+                    else:
+                        _polyline(
+                            locations=to_latlon(part),
+                            color=color,
+                            weight=weight,
+                            opacity=opacity,
+                            dash_array=dash_array
+                        ).add_to(fg)
+                return _apply_common_bindings(fg)
+
+        # Otherwise treat as a collection of geometries (mixed)
+        grp = folium.FeatureGroup()
         for g in geom:
-            layer = geometry_to_folium(g, **style)
-            layer.add_to(group)
-        return group
+            layer = geometry_to_folium(
+                g,
+                color=color,
+                weight=weight,
+                opacity=opacity,
+                dash_array=dash_array,
+                fill=fill,
+                fill_color=fill_color,
+                fill_opacity=fill_opacity,
+                tooltip=tooltip,
+                popup=popup,
+                icon=icon,  # propagate
+                feature_type=None  # do not propagate explicit type to mixed collections
+            )
+            layer.add_to(grp)
+        return _apply_common_bindings(grp)
 
-    # POINT
-    if "x" in geom and "y" in geom:
-        return folium.Marker([geom["y"], geom["x"]])
+    # ---- DICT HANDLING (ArcGIS-style) ----
+    if isinstance(geom, dict):
+        # POINT
+        if "x" in geom and "y" in geom:
+            return _marker(geom["y"], geom["x"])
 
-    # MULTIPOINT
-    if "points" in geom:
-        fg = folium.FeatureGroup()
-        for x, y in geom["points"]:
-            fg.add_child(folium.Marker([y, x]))
-        return fg
+        # MULTIPOINT
+        if "points" in geom:
+            fg = folium.FeatureGroup()
+            for x, y in (geom.get("points") or []):
+                _marker(y, x).add_to(fg)
+            return _apply_common_bindings(fg)
 
-    # POLYLINE
-    if "paths" in geom:
-        latlon = []
-        for path in geom["paths"]:
-            latlon.extend([[y, x] for x, y in path])
-        return folium.PolyLine(latlon, **style)
+        # POLYLINE (multi-part supported)
+        if "paths" in geom:
+            paths = geom.get("paths") or []
+            fg = folium.FeatureGroup()
+            for path in paths:
+                if not path:
+                    continue
+                # If a path is a single vertex, render as Marker
+                if len(path) == 1 and is_num_pair(path[0]):
+                    x, y = path[0]
+                    _marker(y, x).add_to(fg)
+                else:
+                    _polyline(
+                        locations=to_latlon(path),
+                        color=color,
+                        weight=weight,
+                        opacity=opacity,
+                        dash_array=dash_array
+                    ).add_to(fg)
+            return _apply_common_bindings(fg)
 
-    # POLYGON
-    if "rings" in geom:
-        latlon = []
-        for ring in geom["rings"]:
-            latlon.extend([[y, x] for x, y in ring])
-        return folium.Polygon(latlon, **style)
+        # POLYGON (outer + holes via GeoJSON)
+        if "rings" in geom:
+            rings = geom.get("rings") or []
+            if not rings:
+                raise ValueError("Polygon has no rings")
+            gj = polygon_geojson_from_rings(rings)
+            return _polygon_geojson(gj)
 
-    raise ValueError("Unsupported geometry type")
+    raise ValueError("Unsupported geometry type or structure")
 
 
 
@@ -164,7 +424,6 @@ def extract_coordinates(geom):
         return coords
 
     raise ValueError("Unsupported geometry format")
-
 
 
 
@@ -219,11 +478,11 @@ def set_bounds_point(points):
     max_lon = float('-inf')
 
     def process_point(pt):
-        nonlocal min_lat, min_lon, max_lat, max_lon
+        nonlocal min_lon, min_lat, max_lon, max_lat
         if not (isinstance(pt, (list, tuple)) and len(pt) == 2):
             return
 
-        lat, lon = pt
+        lon, lat = pt
 
         # Validate numeric
         try:
@@ -294,13 +553,13 @@ def set_bounds_route(route):
     max_lon = float('-inf')
 
     def process_point(pt):
-        nonlocal min_lat, min_lon, max_lat, max_lon
+        nonlocal min_lon, min_lat, max_lon, max_lat
         if (
             isinstance(pt, (list, tuple)) and len(pt) == 2
         ):
             try:
-                lat = float(pt[0])
-                lon = float(pt[1])
+                lon = float(pt[0])
+                lat = float(pt[1])
             except (TypeError, ValueError):
                 return
             min_lat = min(min_lat, lat)
@@ -335,16 +594,16 @@ def set_bounds_boundary(boundary):
     Compute a bounding box for:
       - A single polygon (list of rings)
       - A list of polygons
-      - A flat list of [lat, lon] coordinate pairs
+      - A flat list of [lon, lat] coordinate pairs
 
     Returns:
-        [[min_lat, min_lon], [max_lat, max_lon]]
+        [[min_lon, min_lat], [max_lon, max_lat]]
 
     Raises:
         ValueError: if input is empty or no valid coordinates are found.
 
     Notes:
-        - This function assumes coordinate order is [lat, lon].
+        - This function assumes coordinate order is [lon, lat].
         - It supports multiple polygons and rings (outer/inner).
     """
     min_lat = float('inf')
@@ -353,16 +612,17 @@ def set_bounds_boundary(boundary):
     max_lon = float('-inf')
 
     def process_point(pt):
-        nonlocal min_lat, min_lon, max_lat, max_lon
+        nonlocal min_lon, min_lat, max_lon, max_lat
         if not (isinstance(pt, (list, tuple)) and len(pt) == 2):
             return
 
-        lat, lon = pt  # <-- FIXED: your data is [lat, lon]
+        # Input points are [lon, lat]
+        lon, lat = pt
 
         # Validate numeric
         try:
-            lat = float(lat)
             lon = float(lon)
+            lat = float(lat)
         except Exception:
             return
 
@@ -403,6 +663,7 @@ def set_bounds_boundary(boundary):
     if min_lat == float('inf'):
         raise ValueError("No valid coordinate data found.")
 
+    # Return bounds as [[min_lon, min_lat], [max_lon, max_lat]]
     return [[min_lat, min_lon], [max_lat, max_lon]]
 
 
@@ -455,3 +716,116 @@ def set_center(bounds):
     center_lat = (min_lat + max_lat) / 2
     center_lon = (min_lon + max_lon) / 2
     return [center_lat, center_lon]
+
+
+
+
+# =============================================================================
+# MAP STYLES
+# =============================================================================
+# Preset symbology styles for geometry features deployed to maps
+# =============================================================================
+
+def loaded_project_point(lat, lon, m):
+    popup_html = folium.Popup(
+        """
+        <div style="font-size:14px; font-weight:600; color:#1a4c7c;">
+            Project Footprint (Reference Point)
+        </div>
+        """,
+        max_width=250
+    )
+
+    folium.CircleMarker(
+        location=[lat, lon],
+        radius=8,               # visible but not oversized
+        color="#00bcd4",        # bright cyan outline
+        weight=3,               # medium border
+        fill=True,
+        fill_color="#00bcd4",   # same hue for consistency
+        fill_opacity=0.85,      # strong visibility
+        popup=popup_html
+    ).add_to(m)
+
+
+
+def loaded_project_line(coords, m):
+    popup_html = folium.Popup(
+        """
+        <div style="font-size:14px; font-weight:600; color:#1a4c7c;">
+            Project Footprint (Reference Geometry)
+        </div>
+        """,
+        max_width=250
+    )
+
+    folium.PolyLine(
+        coords,
+        color="#00bcd4",      # bright cyan, highly visible on most basemaps
+        weight=6,             # thicker but not overwhelming
+        opacity=0.85,         # strong visibility
+        dash_array="8, 6",    # dashed to indicate reference
+        popup=popup_html
+    ).add_to(m)
+
+
+def loaded_project_polygon(coords, m):
+    popup_html = folium.Popup(
+        """
+        <div style="font-size:14px; font-weight:600; color:#1a4c7c;">
+            Project Footprint (Reference Geometry)
+        </div>
+        """,
+        max_width=250
+    )
+
+    folium.Polygon(
+        coords,
+        color="#00bcd4",       # bright cyan outline for visibility
+        weight=3,              # clean, medium-weight border
+        dash_array="6, 4",     # dashed to indicate reference layer
+        fill=True,
+        fill_color="#00bcd4",  # same hue for consistency
+        fill_opacity=0.25,     # translucent so it doesn't dominate
+        popup=popup_html
+    ).add_to(m)
+
+
+def traffic_impact_area(coords, m):
+    popup_html = folium.Popup(
+        """
+        <div style="font-size:14px; font-weight:600; color:#1a4c7c;">
+            Project Impact Area (Reference Geometry)
+        </div>
+        """,
+        max_width=250
+    )
+
+    folium.Polygon(
+        coords,
+        color="#00bcd4",       # bright cyan outline for visibility
+        weight=3,              # clean, medium-weight border
+        dash_array="6, 4",     # dashed to indicate reference layer
+        fill=True,
+        fill_color="#00bcd4",  # same hue for consistency
+        fill_opacity=0.25,     # translucent so it doesn't dominate
+        popup=popup_html
+    ).add_to(m)
+
+
+def traffic_impact_route(coords, m):
+    popup_html = folium.Popup(
+            """
+            <div style="font-size:14px; font-weight:600; color:#1a4c7c;">
+                Impacted Route (Reference Geometry)
+            </div>
+            """,
+            max_width=250
+    )
+
+    folium.PolyLine(
+        coords, 
+        color="red", 
+        weight=6
+    ).add_to(m)
+

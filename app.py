@@ -14,9 +14,9 @@ from util.map_util import add_small_geocoder
 from steps.details_form import project_details_form
 from util.instructions_util import instructions
 from steps.review import review_information
-from agol.agol_district_queries import run_district_queries
 from steps.load_project import load_project_apex
 from steps.load_geometry import load_geometry_app
+from steps.traffic_impacts import add_traffic_impact
 
 
 st.set_page_config(page_title="Alaska DOT&PF - APEX Project Loader", page_icon="📝", layout="centered")
@@ -30,7 +30,7 @@ add_small_geocoder(m)
 init_session_state()
 
 
-TOTAL_STEPS = 5
+TOTAL_STEPS = 6
 if "step" not in st.session_state:
     st.session_state.step = 1
 
@@ -89,8 +89,14 @@ if st.session_state.step == 1:
         Make any adjustments before finalizing.
 
         ---
+             
+        **Step 4: Enter Traffic Impact Event**  
+        If a Traffic Impact Event is needed for this project, select the impacted route and set a start and end point for the 
+        the impact event.
+             
+        ---
 
-        **Step 4: Submit Project**  
+        **Step 5: Submit Project**  
         Click **Submit** to validate the data.  
         Once approved, the project will be saved to the database and you can proceed to the next workflow stage.
         """)
@@ -114,9 +120,9 @@ elif st.session_state.step == 2:
     
 
 elif st.session_state.step == 3:
-    st.markdown("### LOAD GEOMETRY 📍")
+    st.markdown("### LOAD FOOTPRINT 📍")
     st.write(
-        "Select the project type and provide its geometry. "
+        "Select the project type and provide its footprint. "
         "After choosing a type, you will see the available upload methods. "
         "Review the instructions below for detailed guidance before continuing."
     )
@@ -127,11 +133,30 @@ elif st.session_state.step == 3:
     st.write("")
     
     load_geometry_app()
-    
 
 
 
 elif st.session_state.step == 4:
+    st.markdown("### TRAFFIC IMPACTS 🚦")
+    st.write(
+        "Indicate whether this project will include a traffic impact event. "
+        "If a traffic impact event will be added to this project, you will select the affected route and define the start "
+        "and end points along that route to show the extent of the impact. "
+        "Review the guidance below before continuing."
+    )
+
+
+    instructions("Load Geometry")
+
+    st.write("")
+    st.write("")
+    
+    add_traffic_impact()
+    
+
+
+
+elif st.session_state.step == 5:
     st.markdown("### REVIEW PROJECT ✔️")
     st.write(
     "Review all submitted project information carefully. "
@@ -149,8 +174,7 @@ elif st.session_state.step == 4:
     
 
 
-
-elif st.session_state.step == 5:
+elif st.session_state.step == 6:
     st.markdown("### UPLOAD PROJECT🚀")
     st.write(
         "Select your name from the dropdown. If not listed, choose **Other** and enter it in the text box. "
@@ -226,7 +250,7 @@ cols = st.columns([1, 1, 4])
 step = st.session_state.step
 
 # ✅ ALL STEPS EXCEPT STEP 5
-if step != 5:
+if step != 6:
 
     # Back button
     with cols[0]:
@@ -241,19 +265,15 @@ if step != 5:
         elif step == 2:
             can_proceed = st.session_state.get("details_complete", False)
         elif step == 3:
-            if st.session_state.project_type:
-                if st.session_state.project_type.startswith("Site"):
-                    can_proceed = st.session_state.selected_point is not None
-                elif st.session_state.project_type.startswith("Route"):
-                    can_proceed = st.session_state.selected_route is not None
-                elif st.session_state.project_type.startswith("Boundary"):
-                    can_proceed = st.session_state.selected_boundary is not None
-                else:
-                    can_proceed = st.session_state.selected_route is not None
-                
+            can_proceed = st.session_state.get("footprint_submitted", False)
         elif step == 4:
+            add_impact = st.session_state.get("traffic_impact_answer")
+            if add_impact == "No":
+                can_proceed = True
+            elif add_impact == "Yes":
+                can_proceed = st.session_state.get("traffic_impact_submitted", False)
+        elif step == 5:
             can_proceed = True
-
         if step < TOTAL_STEPS:
             st.button("Next ➡️", on_click=next_step, disabled=not can_proceed)
 

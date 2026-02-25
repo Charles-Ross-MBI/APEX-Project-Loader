@@ -87,9 +87,15 @@ def init_session_state():
         "duplicate_found": False,
         "continue_w_duplicate": None,
         "step": 1,
+        "is_awp": False,
         "selected_point": None,
         "selected_route": None,
         "selected_boundary": None,
+        'project_geometry': None,
+        'project_geometry_type': None,
+        'project_buffer': None,
+        "selected_bop": None,
+        "selected_eop": None,
         "project_type": None,
         "geo_option": None,
         "info_option": None,
@@ -214,7 +220,8 @@ def init_session_state():
     # AGOL URLS
     # -------------------------------------------------------------------------
     agol_urls = {
-        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_62a5fb52fb4445419498a76c214d7dc0/FeatureServer",
+        'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/APEX_PROJECTS_LOADER_APPLICATION/FeatureServer",
+        'traffic_impact_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/TRAFFIC_IMPACT_EVENTS_LOADER_APPLICATION/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
         "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
@@ -225,25 +232,26 @@ def init_session_state():
         'geometry_layer': 1,
     }
 
+    traffic_impact_layers = {
+        'traffic_impacts_layer': 0,
+        'traffic_impact_routes_layer': 1,
+        'traffic_impact_start_points_layer': 2,
+        'traffic_impact_end_points_layer': 3
+    }
 
     # Layer indices used by loaders and query helpers
     apex_layers = {
         "projects_layer": 0,
-        "sites_layer": 1,
-        "routes_layer": 2,
-        "boundaries_layer": 3,
-        "bop_eop_layer": 4,
+        "locations_layer": 1,
+        "sites_layer": 2,
+        "routes_layer": 3,
+        "boundaries_layer": 4,
         "impact_comms_layer": 5,
         "region_layer": 6,
         "bor_layer": 7,
         "senate_layer": 8,
-        "house_layer": 9,
-        "impact_routes_layer": 10,
-        'ti_card_layer': 11,
-        'ti_route_layer': 12,
-        'ti_start_layer': 13,
-        'ti_end_layer': 14
-    }
+        "house_layer": 9
+        }
 
     # Geography intersect services (used by district_queries / geography payloads)
     geography_intersects = {
@@ -273,6 +281,8 @@ def init_session_state():
     for key, value in agol_urls.items():
         st.session_state.setdefault(key, value)
     for key, value in apex_layers.items():
+        st.session_state.setdefault(key, value)
+    for key, value in traffic_impact_layers.items():
         st.session_state.setdefault(key, value)
     for key, value in aashtoware_layers.items():
         st.session_state.setdefault(key, value)
@@ -329,7 +339,7 @@ def init_session_state():
         "award_fiscal_year": "AwardFederalFiscalYear",
         "contractor": "AwardedContractor",
         "awarded_amount": "AwardedContractAmount",
-        "current_contract_amount": "",
+        "current_contract_amount": "CurrentContractAmount",
         "amount_paid_to_date": "AmountPaidToDate",
         "tenadd": "TentativeAdvertisingDate",
         "awp_proj_desc": "AASTOWARE_Description",

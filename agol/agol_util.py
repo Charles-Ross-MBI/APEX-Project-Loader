@@ -212,6 +212,8 @@ def query_record(url: str, layer: int, where: str, fields="*", return_geometry=F
 
 
 
+
+
 # =============================================================================
 # PULL AASHTOWARE GEOMETRY RECORD
 # =============================================================================
@@ -468,6 +470,151 @@ def select_record(url: str, layer: int, id_field: str, id_value: str, fields="*"
     except Exception as e:
         raise Exception(f"Error retrieving project record: {e}")
     
+    
+
+
+
+def query_routes_within_buffer(
+    buffer_geom,
+    *,
+    fields=("Route_ID", "Route_Name"),
+    include_geometry=True,
+    token=None,
+):
+    """
+    Intersect a buffer geometry with AKDOT Roads feature layer and return results.
+
+    Endpoint:
+        https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Roads_AKDOT/FeatureServer/0/query
+
+    Parameters
+    ----------
+    buffer_geom : shapely.geometry.Polygon | shapely.geometry.MultiPolygon | list
+        EXPECTED IN [lon, lat] WITHOUT ANY NORMALIZATION.
+        - Shapely Polygon/MultiPolygon (exterior used), OR
+        - A single ring [[lon, lat], ...] (open or closed), OR
+        - A list of rings [[[lon, lat], ...], ...].
+        No coordinate reordering, closing, or coercion is performed.
+    fields : tuple|list|str
+        Fields to return (e.g., ("Route_ID","Route_Name")). '*' allowed.
+    include_geometry : bool
+        If True, return geometry for each matched route (as [[lon, lat], ...]).
+    token : str | None
+        AGOL token. If None, will call get_agol_token() if available.
+
+    Returns
+    -------
+    list[dict]
+        Each dict contains:
+            {
+              "attributes": {...requested fields...},
+              "geometry": [[lon, lat], ...]  # if include_geometry and available
+            }
+
+    Notes
+    -----
+    - Inputs are passed through as-is (lon,lat). No normalizers are applied.
+    - Output geometries are flattened to a single [[lon,lat], ...] list.
+    """
+
+    SERVICE_URL = (
+        "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/"
+        "Roads_AKDOT/FeatureServer/0/query"
+    )
+
+    # Resolve token only (no changes to geometry)
+    if token is None:
+        try:
+            token = get_agol_token()  # optional helper if present
+        except NameError:
+            token = None
+
+    # Normalize fields to comma-separated string (not a geometry change)
+    if isinstance(fields, (list, tuple)):
+        out_fields = ",".join(fields)
+    else:
+        out_fields = str(fields).strip() if fields else "*"
+
+    # Build rings payload in lon,lat — WITHOUT changing coordinates
+    rings_lonlat = None
+
+    # Shapely Polygon / MultiPolygon
+    is_shapely_like = hasattr(buffer_geom, "geom_type") and hasattr(buffer_geom, "exterior")
+    if is_shapely_like:
+        geom_type = getattr(buffer_geom, "geom_type", None)
+        if geom_type == "Polygon":
+            # Shapely exterior returns [(x, y)] which are (lon, lat)
+            coords = list(buffer_geom.exterior.coords)
+            rings_lonlat = [ [ [float(x), float(y)] for (x, y) in coords ] ]
+        elif geom_type == "MultiPolygon":
+            rings_lonlat = []
+            for poly in buffer_geom.geoms:
+                coords = list(poly.exterior.coords)
+                rings_lonlat.append([ [float(x), float(y)] for (x, y) in coords ])
+        else:
+            raise ValueError(f"Unsupported Shapely geometry type: {geom_type}")
+    else:
+        # Python lists: pass through exactly as provided
+        if not isinstance(buffer_geom, list) or len(buffer_geom) == 0:
+            raise ValueError("buffer_geom must be a Shapely (Multi)Polygon or a non-empty list.")
+
+        # If it's a single ring [[lon,lat], ...], wrap it in rings; if already [[[lon,lat],...],...], use as-is
+        if buffer_geom and isinstance(buffer_geom[0], (list, tuple)) and len(buffer_geom[0]) == 2:
+            rings_lonlat = [buffer_geom]  # single ring
+        else:
+            rings_lonlat = buffer_geom     # multiple rings
+
+    arcgis_polygon = {
+        "rings": rings_lonlat,
+        "spatialReference": {"wkid": 4326}
+    }
+
+    params = {
+        "geometry": json.dumps(arcgis_polygon),
+        "geometryType": "esriGeometryPolygon",
+        "inSR": 4326,
+        "spatialRel": "esriSpatialRelIntersects",
+        "where": "1=1",
+        "outFields": out_fields,
+        "returnGeometry": bool(include_geometry),
+        "outSR": 4326,
+        "f": "json",
+    }
+    if token:
+        params["token"] = token
+
+    resp = requests.post(SERVICE_URL, data=params)
+    if resp.status_code != 200:
+        raise Exception(f"Request failed with status code {resp.status_code}: {resp.text}")
+
+    data = resp.json()
+    if "error" in data:
+        raise Exception(f"API Error: {data['error']['message']} - {data['error'].get('details', [])}")
+
+    features = data.get("features", []) or []
+
+    results = []
+    for feat in features:
+        packet = {"attributes": feat.get("attributes", {})}
+
+        if include_geometry:
+            geom = feat.get("geometry") or {}
+            paths = geom.get("paths") or []  # [[[lon,lat],...], ...]
+            # Flatten multipart into a single [[lon,lat], ...] list for downstream use
+            line_lonlat = []
+            for part in paths:
+                for xy in part:
+                    if isinstance(xy, (list, tuple)) and len(xy) == 2:
+                        line_lonlat.append([float(xy[0]), float(xy[1])])
+            if line_lonlat:
+                packet["geometry"] = line_lonlat
+
+        results.append(packet)
+
+    return results
+    
+
+
 
 
 def get_objectids_by_identifier(url: str, layer: int, id_field: str, id_value: str):
@@ -687,20 +834,27 @@ def delete_cascade_by_globalid(
 # AGOLQueryIntersect:
 #   - Builds an intersects query against a layer, given point/line/polygon input
 #   - Supports running against multiple input geometries and merging results
+#   - Assumes incoming coordinates are already in [lon, lat] (x, y) order
 # =============================================================================
+import json
+import requests
+
+# Assumes you have this available in your environment
+# from your_auth_module import get_agol_token
+
 class AGOLQueryIntersect:
     def __init__(self, url, layer, geometry, fields="*", return_geometry=False,
                  list_values=None, string_values=None):
         self.url = url
         self.layer = layer
 
-        # NEW: allow single geometry OR list of geometries
+        # Accept single geometry OR list of geometries; DO NOT SWAP—input is already [lon, lat]
         if isinstance(geometry, list) and len(geometry) > 0 and all(isinstance(g, list) for g in geometry):
             # geometry is a list of geometries
-            self.geometry = [self._swap_coords(g) for g in geometry]
+            self.geometry = geometry
         else:
             # geometry is a single geometry
-            self.geometry = [self._swap_coords(geometry)]
+            self.geometry = [geometry]
 
         self.fields = fields
         self.return_geometry = return_geometry
@@ -708,7 +862,7 @@ class AGOLQueryIntersect:
         self.string_values_field = string_values
         self.token = self._authenticate()
 
-        # NEW: run query for each geometry and merge results
+        # Run query for each geometry and merge results
         self.results = self._execute_query_multiple()
 
         # If list_values is provided, store unique values in a list
@@ -729,23 +883,14 @@ class AGOLQueryIntersect:
             raise ValueError("Authentication failed: Invalid token.")
         return token
 
-    def _swap_coords(self, geometry):
-        """Swap coordinates from [lat, lon] to [lon, lat] if needed."""
-        if isinstance(geometry, list):
-            # Point
-            if len(geometry) == 2 and all(isinstance(coord, (int, float)) for coord in geometry):
-                return [geometry[1], geometry[0]]  # swap
-            # Line or polygon
-            elif all(isinstance(coord, list) and len(coord) == 2 for coord in geometry):
-                return [[pt[1], pt[0]] for pt in geometry]  # swap each pair
-        return geometry
-
     def _build_geometry(self, geometry):
         """
         Convert input geometry list into ArcGIS JSON geometry dict and geometryType.
 
+        Assumes input coordinates are already [lon, lat].
+
         Supported:
-            - Point: [lon, lat] (after swap)
+            - Point: [lon, lat]
             - Line : [[lon, lat], ...] (treated as polyline unless closed polygon)
             - Polygon: [[lon, lat], ...] closed or auto-closed
 
@@ -778,7 +923,7 @@ class AGOLQueryIntersect:
             # If only 2 points → definitely a line
             if len(geometry) == 2:
                 geometry_dict = {
-                    "paths": [geometry],
+                    "paths": [geometry],  # already [lon, lat]
                     "spatialReference": {"wkid": 4326}
                 }
                 geometry_type_str = "esriGeometryPolyline"
@@ -797,7 +942,7 @@ class AGOLQueryIntersect:
             # A polygon must have at least 4 points (3 unique + closure)
             if len(ring) >= 4:
                 geometry_dict = {
-                    "rings": [ring],
+                    "rings": [ring],  # already [lon, lat]
                     "spatialReference": {"wkid": 4326}
                 }
                 geometry_type_str = "esriGeometryPolygon"
@@ -810,6 +955,8 @@ class AGOLQueryIntersect:
             }
             geometry_type_str = "esriGeometryPolyline"
             return geometry_dict, geometry_type_str
+
+        raise ValueError("Invalid geometry structure.")
 
     def _execute_query(self, geometry):
         geometry_dict, geometry_type_str = self._build_geometry(geometry)
@@ -845,10 +992,9 @@ class AGOLQueryIntersect:
             if self.return_geometry:
                 feature_package["geometry"] = feature.get("geometry", {})
             results.append(feature_package)
-
         return results
 
-    # NEW: run query for each geometry and merge unique results
+    # Run query for each geometry and merge unique results
     def _execute_query_multiple(self):
         combined = []
         seen = set()

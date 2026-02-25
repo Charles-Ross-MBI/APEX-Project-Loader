@@ -1,483 +1,385 @@
-
-"""
-===============================================================================
-GEOMETRY LOAD / SELECTION (STREAMLIT) — PROJECT TYPE + UPLOAD METHOD ROUTER
-===============================================================================
-
-Purpose:
-    Provides the Streamlit UI that guides users through selecting a project
-    geometry for upload (site/route/boundary) using multiple input methods:
-      - Shapefile upload (ZIP)
-      - Manual entry (lat/lon or milepoints)
-      - Draw on map
-      - AASHTOWare point (when available for site projects)
-
-    After a geometry is selected/updated, this module triggers district/geography
-    intersect queries and displays the resulting House/Senate/Borough/Region
-    values (and routes when applicable).
-
-Key behaviors:
-    - Project type selection:
-        * Site Project / Route Project / Boundary Project
-        * Changing project type clears geometry + geography outputs to prevent
-          stale results and mismatched state.
-    - Upload method routing:
-        * Presents different upload method choices based on project type.
-        * Switching upload method clears existing geometry selections to avoid
-          cross-method bleed (e.g., previously drawn route vs uploaded shapefile).
-        * Optionally exposes an "AASHTOWare" method for Site projects when an
-          AASHTOWare project is selected and lat/lon fields exist.
-    - Geography/district queries:
-        * Tracks previous geometry values (prev_selected_*) and runs
-          run_district_queries() only when geometry changes.
-    - Geography display:
-        * Shows a “PROJECT GEOGRAPHIES” expander when geometry exists and any
-          intersect results are present.
-
-Session-state dependencies (expected at runtime):
-    Inputs:
-      - 'project_type' (selected via segmented control)
-      - Geometry keys:
-          'selected_point', 'selected_route', 'selected_boundary'
-      - AASHTOWare keys (for optional Site/AWP option):
-          'aashto_selected_project', 'awp_dcml_latitude', 'awp_dcml_longitude'
-      - Upload method tracking:
-          'option', 'geo_option', 'prev_project_type'
-
-    Outputs (written/cleared here or by downstream queries):
-      - Geography strings:
-          'house_string', 'senate_string', 'borough_string', 'region_string'
-      - Route overlay results:
-          'route_ids', 'route_names', 'route_list' (set by district_queries)
-      - Previous geometry tracking:
-          'prev_selected_point', 'prev_selected_route', 'prev_selected_boundary'
-
-Notes:
-    - This module is intentionally stateful: it coordinates multiple UI flows
-      by manipulating st.session_state and relies on Streamlit reruns.
-    - All geometry capture functions are imported from geometry_util and are
-      expected to write into the canonical session_state keys.
-
-===============================================================================
-
-Standard Documentation Additions:
-    - Helper function docstrings describe: intent, side effects, inputs/outputs.
-    - Comments call out state transitions and why clearing occurs.
-    - No executable logic has been changed; only documentation/commenting added.
-"""
-
 import streamlit as st
 from util.geometry_util import (
     point_shapefile,
     polyline_shapefile,
     polygon_shapefile,
     enter_latlng,
-    enter_milepoints,
     draw_point,
     draw_line,
     draw_boundary,
     aashtoware_point,
     aashtoware_path,
 )
-from agol.agol_util import aashtoware_geometry
-from agol.agol_district_queries import run_district_queries
+from util.streamlit_util import (
+    segmented_with_safe_default,
+    handle_project_type_change,
+    handle_upload_method_change,
+    run_queries_if_geometry_changed,
+    render_geographies_expander,
+)
+from agol.agol_util import aashtoware_geometry  # (kept for side effects elsewhere if needed)
+from agol.agol_district_queries import run_district_queries  # noqa: F401 (referenced in utilities)
 
 
 # =============================================================================
-# INTERNAL HELPERS (refactor only; preserves behavior)
-# =============================================================================
-def _segmented_with_safe_default(label: str, options: list[str], state_key: str) -> str:
-    """
-    Render a segmented control and persist the selection to session state.
-
-    This helper ensures the selection is always valid for the provided options:
-    - If the previous session value is present and still valid, it is reused.
-    - Otherwise, the first item in `options` becomes the default selection.
-
-    Args:
-        label: UI label displayed above the segmented control.
-        options: Allowed option strings presented to the user.
-        state_key: Session-state key used to store the selected option.
-
-    Returns:
-        The selected option string written to st.session_state[state_key].
-
-    Side Effects:
-        - Writes to st.session_state[state_key].
-    """
-    prev = st.session_state.get(state_key)
-    if prev not in options:
-        prev = options[0]
-    st.session_state[state_key] = st.segmented_control(label, options, default=prev)
-    return st.session_state[state_key]
-
-
-def _clear_geography_outputs() -> None:
-    """
-    Clear computed geography/district output strings.
-
-    These values are displayed in the "PROJECT GEOGRAPHIES" expander and should
-    be reset when the project type changes to avoid stale/mismatched results.
-
-    Side Effects:
-        - Sets house_string/senate_string/borough_string/region_string to "".
-    """
-    st.session_state.house_string = ""
-    st.session_state.senate_string = ""
-    st.session_state.borough_string = ""
-    st.session_state.region_string = ""
-
-
-def _clear_geometry(*, point=False, route=False, boundary=False) -> None:
-    """
-    Clear selected geometry values in session state.
-
-    Args:
-        point: If True, clears st.session_state.selected_point.
-        route: If True, clears st.session_state.selected_route.
-        boundary: If True, clears st.session_state.selected_boundary.
-
-    Side Effects:
-        - Sets selected_* keys to None depending on flags.
-    """
-    if point:
-        st.session_state.selected_point = None
-    if route:
-        st.session_state.selected_route = None
-    if boundary:
-        st.session_state.selected_boundary = None
-
-
-def _handle_project_type_change() -> None:
-    """
-    Handle a change in project type.
-
-    When a user switches project types (Site/Route/Boundary), previously selected
-    geometry and computed geographies can become invalid. This routine clears:
-      - Geography output strings
-      - Selected geometry values (point/route/boundary)
-      - Upload method selection ("option")
-    and updates the tracker key 'prev_project_type'.
-
-    Side Effects:
-        - Mutates multiple st.session_state keys.
-    """
-    if st.session_state.get("prev_project_type") != st.session_state.get("project_type"):
-        _clear_geography_outputs()
-        _clear_geometry(point=True, route=True, boundary=True)
-        st.session_state["option"] = None
-        st.session_state.prev_project_type = st.session_state.get("project_type")
-
-
-def _handle_upload_method_change(option: str, *, clear_boundary: bool = False) -> None:
-    """
-    Handle a change in upload method.
-
-    Different upload methods write to the same canonical geometry keys
-    (selected_point/selected_route/selected_boundary). To prevent cross-method
-    bleed (e.g., a previously drawn line persisting when switching to shapefile),
-    the prior geometry is cleared when the upload method changes.
-
-    Args:
-        option: Newly selected upload method string.
-        clear_boundary: If True, also clears selected_boundary (used by Boundary projects).
-
-    Side Effects:
-        - Clears selected geometry keys (point/route, and possibly boundary).
-        - Writes st.session_state.geo_option to the new option.
-    """
-    if st.session_state.get("geo_option") != option:
-        _clear_geometry(point=True, route=True, boundary=clear_boundary)
-        st.session_state.geo_option = option
-
-
-def _ensure_prev_geometry_trackers() -> None:
-    """
-    Ensure that "previous geometry" trackers exist in session state.
-
-    These keys are used to detect geometry changes between reruns and avoid
-    expensive district queries unless necessary.
-
-    Side Effects:
-        - Initializes prev_selected_point/route/boundary to None if absent.
-    """
-    if "prev_selected_point" not in st.session_state:
-        st.session_state.prev_selected_point = None
-    if "prev_selected_route" not in st.session_state:
-        st.session_state.prev_selected_route = None
-    if "prev_selected_boundary" not in st.session_state:
-        st.session_state.prev_selected_boundary = None
-
-
-def _run_queries_if_geometry_changed(point_val, route_val, boundary_val) -> None:
-    """
-    Run district/geography queries only when the selected geometry changes.
-
-    Query calls may be expensive; this function compares current selected geometry
-    to "prev_selected_*" values and triggers run_district_queries() only when:
-      - the value is not None, AND
-      - the value differs from the previous value.
-
-    Args:
-        point_val: Current st.session_state.selected_point value.
-        route_val: Current st.session_state.selected_route value.
-        boundary_val: Current st.session_state.selected_boundary value.
-
-    Side Effects:
-        - May call run_district_queries().
-        - Updates prev_selected_point/route/boundary when a change is detected.
-    """
-    _ensure_prev_geometry_trackers()
-
-    point_changed = point_val is not None and point_val != st.session_state.prev_selected_point
-    route_changed = route_val is not None and route_val != st.session_state.prev_selected_route
-    boundary_changed = boundary_val is not None and boundary_val != st.session_state.prev_selected_boundary
-
-    if point_changed or route_changed or boundary_changed:
-        run_district_queries()
-        st.session_state.prev_selected_point = point_val
-        st.session_state.prev_selected_route = route_val
-        st.session_state.prev_selected_boundary = boundary_val
-
-
-def _render_geographies_expander(*, show_routes: bool = False) -> None:
-    """
-    Render the "PROJECT GEOGRAPHIES" expander section.
-
-    This is shown only when:
-      - a geometry exists for the selected project type, AND
-      - at least one geography output string is present.
-
-    Args:
-        show_routes: If True, also display route IDs and names (Route/Boundary flows).
-
-    Side Effects:
-        - Renders Streamlit UI elements (expander, columns, markdown).
-    """
-    house_val = st.session_state.get("house_string")
-    senate_val = st.session_state.get("senate_string")
-    borough_val = st.session_state.get("borough_string")
-    region_val = st.session_state.get("region_string")
-
-    with st.expander("PROJECT GEOGRAPHIES", expanded=True):
-        col1, col2 = st.columns(2)
-        col1.markdown(f"**House Districts:** {house_val or '—'}")
-        col2.markdown(f"**Senate Districts:** {senate_val or '—'}")
-        col1.markdown(f"**Boroughs:** {borough_val or '—'}")
-        col2.markdown(f"**Regions:** {region_val or '—'}")
-
-        if show_routes:
-            route_ids = st.session_state.get("route_ids", None)
-            route_names = st.session_state.get("route_names", None)
-            st.markdown(f"**Route IDs:** {route_ids}")
-            st.markdown(f"**Route Names:** {route_names} ")
-
-
-# =============================================================================
-# ENTRYPOINT: GEOMETRY SELECTION / UPLOAD ROUTER
+# ENTRYPOINT: GEOMETRY SELECTION / UPLOAD ROUTER (container-based, no forms)
 # =============================================================================
 def load_geometry_app():
     """
     Primary Streamlit UI entrypoint for selecting and loading project geometry.
-
-    Responsibilities:
-        1) Prompt user to select project type (Site/Route/Boundary).
-        2) Present upload method choices based on project type (and AWP availability).
-        3) Route user to the selected geometry capture method.
-        4) Detect geometry changes and run district queries when needed.
-        5) Display resulting geographies (and routes when applicable).
-
-    Session State Contract (high-level):
-        Inputs:
-            - project_type, option, geo_option, prev_project_type
-            - selected_point, selected_route, selected_boundary
-            - aashto_selected_project, awp_dcml_latitude, awp_dcml_longitude
-        Outputs:
-            - house_string, senate_string, borough_string, region_string
-            - route_ids, route_names (from district_queries)
-            - prev_selected_point, prev_selected_route, prev_selected_boundary
     """
+
+    # --------------------------
+    # Versioned container key support
+    # --------------------------
+    st.session_state.setdefault("geometry_form_version", 0)
+    st.session_state.setdefault("prev_geometry_option", None)
+    st.session_state.setdefault("prev_geometry_project_type", None)
+
+    # NEW/CHANGED: Initialize submission and snapshots
+    st.session_state.setdefault("footprint_submitted", False)
+    st.session_state.setdefault("submitted_project_type", None)
+    st.session_state.setdefault("submitted_option", None)
+    st.session_state.setdefault("submitted_geom_sig", None)
+    st.session_state.setdefault("map_reset_counter", 0)
+
+    # NEW: Helper to create a stable signature of current geometry
+    def _geometry_signature(point_val, route_val, boundary_val):
+        import json
+        def _safe_dump(x):
+            try:
+                return json.dumps(x, sort_keys=True, default=str)
+            except Exception:
+                return str(x)
+        if point_val is not None:
+            return ("point", _safe_dump(point_val))
+        if route_val is not None:
+            return ("route", _safe_dump(route_val))
+        if boundary_val is not None:
+            return ("boundary", _safe_dump(boundary_val))
+        return (None, None)
+
     # -------------------------------------------------------------------------
     # Choose Site / Route / Boundary project type
     # -------------------------------------------------------------------------
-    st.markdown("###### Choose Project Type\n", unsafe_allow_html=True)
-
-    # Persist previous project_type choice when possible.
+    st.markdown("###### CHOOSE PROJECT TYPE\n", unsafe_allow_html=True)
+    
+    #Display Project Type
+    options = ["Site Project", "Route Project"]
+    if st.session_state['is_awp'] == False:
+        options.append("Boundary Project")
+        
     st.session_state["project_type"] = st.segmented_control(
         "Select Project Type:",
-        ["Site Project", "Route Project", "Boundary Project"],
-        default=st.session_state.get("project_type", None),  # persist previous choice
+        options,
+        default=st.session_state.get("project_type", None),
     )
-
-    # If project type changed, clear geometry + computed outputs (prevents stale display).
-    _handle_project_type_change()
+  
+    # Clears geometry + computed outputs when project type changes
+    handle_project_type_change()
 
     st.write("")
-
+    
     # Only render upload options once a project type is selected.
     project_type = st.session_state.get("project_type")
     if not project_type:
+        # If project type was cleared and we had a submission before, invalidate it
+        if st.session_state.get("footprint_submitted"):
+            st.session_state["footprint_submitted"] = False  # NEW/CHANGED
         return
 
-
-
-    st.markdown("###### Upload Geospatial Data\n", unsafe_allow_html=True)
-
+    st.markdown("###### CHOOSE GEOSPATIAL SOURCE\n", unsafe_allow_html=True)
 
     # -------------------------------------------------------------------------
     # Initialize flags (default to not showing options)
     # -------------------------------------------------------------------------
     show_awp_point_option = False
     show_awp_route_option = False
-    points = st.session_state.get("awp_geometry_points") or {}
-
+    points = st.session_state.get("awp_geometry_points")
+    
     # -------------------------------------------------------------------------
-    # Determine whether AASHTOWare upload option should be offered (Site)
-    # - Requires Midpoint.lat and Midpoint.lon
+    # Determine whether AASHTOWare option should be offered (Site)
+    # AWP Site option is available ONLY if points contains a valid Midpoint.
     # -------------------------------------------------------------------------
     if project_type.startswith("Site"):
-        mid = points.get("Midpoint") or {}
-        mid_lat = mid.get("lat")
-        mid_lon = mid.get("lon")
+        if points:
+            mid = points.get("Midpoint")
 
-        # Only set and show if both values exist (non-None)
-        if mid_lat is not None and mid_lon is not None:
-            st.session_state["awp_dcml_mid_latitude"] = mid_lat
-            st.session_state["awp_dcml_mid_longitude"] = mid_lon
-            show_awp_point_option = True
+            # Check Midpoint exists and has valid lat/lon
+            if (
+                isinstance(mid, dict)
+                and mid.get("lat") is not None
+                and mid.get("lon") is not None
+            ):
+                show_awp_point_option = True
 
     # -------------------------------------------------------------------------
-    # Determine whether AASHTOWare upload option should be offered (Route)
-    # - Requires BOP.lat/lon and EOP.lat/lon
+    # Determine whether AASHTOWare option should be offered (Route)
+    # AWP Route option is available ONLY if points contains valid BOP and EOP.
     # -------------------------------------------------------------------------
     if project_type.startswith("Route"):
-        bop = points.get("BOP") or {}
-        eop = points.get("EOP") or {}
+        if points:
+            bop = points.get("BOP")
+            eop = points.get("EOP")
 
-        bop_lat = bop.get("lat")
-        bop_lon = bop.get("lon")
-        eop_lat = eop.get("lat")
-        eop_lon = eop.get("lon")
+            # Check BOP and EOP exist and contain valid lat/lon
+            if (
+                isinstance(bop, dict) and isinstance(eop, dict)
+                and bop.get("lat") is not None and bop.get("lon") is not None
+                and eop.get("lat") is not None and eop.get("lon") is not None
+                ):
 
-        # Only set and show if all four values exist (non-None)
-        if None not in (bop_lat, bop_lon, eop_lat, eop_lon):
-            st.session_state["awp_dcml_bop_latitude"] = bop_lat
-            st.session_state["awp_dcml_bop_longitude"] = bop_lon
-            st.session_state["awp_dcml_eop_latitude"] = eop_lat
-            st.session_state["awp_dcml_eop_longitude"] = eop_lon
-            show_awp_route_option = True
-
-
+                show_awp_route_option = True
 
     # -------------------------------------------------------------------------
-    # Project type routing
+    # Upload method SEGMENTED CONTROL (OUTSIDE the container)
     # -------------------------------------------------------------------------
     if project_type.startswith("Site"):
-        # Site projects use point-based geometry capture.
         options = ["Upload Shapefile", "Enter Latitude/Longitude", "Select Point on Map"]
-
         if show_awp_point_option:
-            # AASHTOWare must be first and preselected when available.
             options = ["AASHTOWare"] + options
-
-            # Force default selection to AASHTOWare whenever it is offered.
-            st.session_state["option"] = "AASHTOWare"
-
-        # Choose upload method and clear geometry if method changed.
-        option = _segmented_with_safe_default("Choose Upload Method:", options, "option")
-        _handle_upload_method_change(option, clear_boundary=False)
-
-        # Route to selected mechanism (each writes canonical geometry keys).
-        if option == "AASHTOWare":
-            aashtoware_point(
-                mid_lat = st.session_state.get("awp_dcml_mid_latitude"),
-                mid_lon = st.session_state.get("awp_dcml_mid_longitude"),
-            )
-            st.session_state.selected_route = None
-        elif option == "Upload Shapefile":
-            point_shapefile()
-            st.session_state.selected_route = None
-        elif option == "Select Point on Map":
-            draw_point()
-            st.session_state.selected_route = None
-        elif option == "Enter Latitude/Longitude":
-            enter_latlng()
-            st.session_state.selected_route = None
+            # NEW/CHANGED: don't override user's previous option on every render
+            st.session_state.setdefault("option", "AASHTOWare")
+        option = segmented_with_safe_default("Choose Upload Method:", options, "option")
+        handle_upload_method_change(option, clear_boundary=False)
 
     elif project_type.startswith("Route"):
-        # Route projects use line-based geometry capture.
-        options = ["Upload Shapefile", "Enter Mileposts", "Draw Route on Map"]
-
+        options = ["Upload Shapefile", "Draw Route on Map"]
         if show_awp_route_option:
-            # AASHTOWare must be first and preselected when available.
             options = ["AASHTOWare"] + options
+            # NEW/CHANGED: don't override user's previous option on every render
+            st.session_state.setdefault("option", "AASHTOWare")
+        option = segmented_with_safe_default("Choose Upload Method:", options, "option")
+        handle_upload_method_change(option, clear_boundary=False)
 
-            # Force default selection to AASHTOWare whenever it is offered.
-            st.session_state["option"] = "AASHTOWare"
-
-        option = _segmented_with_safe_default("Choose Upload Method:", options, "option")
-        _handle_upload_method_change(option, clear_boundary=False)
-
-        if option == "AASHTOWare":
-            aashtoware_path(
-                bop_lat=st.session_state["awp_dcml_bop_latitude"], 
-                bop_lon=st.session_state["awp_dcml_bop_longitude"], 
-                eop_lat=st.session_state["awp_dcml_eop_latitude"], 
-                eop_lon=st.session_state["awp_dcml_eop_longitude"]
-            )
-        elif option == "Upload Shapefile":
-            polyline_shapefile()
-            st.session_state.selected_point = None
-        elif option == "Enter Mileposts":
-            pass
-            st.session_state.selected_point = None
-        elif option == "Draw Route on Map":
-            draw_line()
-            st.session_state.selected_point = None
-
-    elif project_type.startswith("Boundary"):
-        # Boundary projects use polygon-based geometry capture.
+    else:  # Boundary
         options = ["Upload Shapefile", "Draw Boundary on Map"]
+        option = segmented_with_safe_default("Choose Upload Method:", options, "option")
+        handle_upload_method_change(option, clear_boundary=True)
 
-        option = _segmented_with_safe_default("Choose Upload Method:", options, "option")
-        _handle_upload_method_change(option, clear_boundary=True)
-
-        if option == "Upload Shapefile":
-            polygon_shapefile()
-            st.session_state.selected_point = None
-        elif option == "Draw Boundary on Map":
-            draw_boundary()
-            st.session_state.selected_point = None
+    # NEW/CHANGED: If the controls differ from what was submitted, invalidate submission
+    if st.session_state.get("footprint_submitted"):
+        if (project_type != st.session_state.get("submitted_project_type") or
+            option != st.session_state.get("submitted_option")):
+            st.session_state["footprint_submitted"] = False
 
     # -------------------------------------------------------------------------
-    # Geometry-change detection + district queries
+    # VERSION BUMP LOGIC for the container (mirrors details form pattern)
+    # - Bump when Project Type or Upload Method changes to regenerate widgets.
     # -------------------------------------------------------------------------
-    # Read the canonical selected geometry keys (set by geometry_util functions).
-    point_val = st.session_state.get("selected_point")
-    route_val = st.session_state.get("selected_route")
-    boundary_val = st.session_state.get("selected_boundary")
+    current_opt = option
+    prev_opt = st.session_state.get("prev_geometry_option")
+    if current_opt != prev_opt:
+        st.session_state["geometry_form_version"] = st.session_state.get("geometry_form_version", 0) + 1
+        st.session_state["prev_geometry_option"] = current_opt
+        # Also invalidate previous submission on option change (defensive)
+        if st.session_state.get("footprint_submitted"):
+            st.session_state["footprint_submitted"] = False  # NEW/CHANGED
 
-    # Run intersect queries only when the geometry changes (performance optimization).
-    _run_queries_if_geometry_changed(point_val, route_val, boundary_val)
+    current_pt = project_type
+    prev_pt = st.session_state.get("prev_geometry_project_type")
+    if current_pt != prev_pt:
+        st.session_state["geometry_form_version"] = st.session_state.get("geometry_form_version", 0) + 1
+        st.session_state["prev_geometry_project_type"] = current_pt
+        # Also invalidate previous submission on project type change (defensive)
+        if st.session_state.get("footprint_submitted"):
+            st.session_state["footprint_submitted"] = False  # NEW/CHANGED
 
-    # -------------------------------------------------------------------------
-    # Display expander if geometry exists AND any geography result exists
-    # -------------------------------------------------------------------------
-    house_val = st.session_state.get("house_string")
-    senate_val = st.session_state.get("senate_string")
-    borough_val = st.session_state.get("borough_string")
-    region_val = st.session_state.get("region_string")
+    # --------------------------
+    # Construct the custom container key (versioned)
+    # --------------------------
+    version = st.session_state.get("geometry_form_version", 0)
+    container_key = f"geometry_upload_container_{version}"
 
-    # Expander is only useful if there is at least one populated geography value.
-    has_any_geography = any([house_val, senate_val, borough_val, region_val])
+    # =============================================================================
+    # BEGIN CONTAINER (everything after the segmented control lives inside here)
+    # =============================================================================
+    geo_container = st.container(key=container_key, border=True)
+    with geo_container:
+        # ---------------------------------------------------------------------
+        # NEW/CHANGED: Rehydrate previously submitted geometry so the map
+        # components can repaint when the user returns to this page.
+        # ---------------------------------------------------------------------
+        if st.session_state.get("footprint_submitted") and st.session_state.get("project_geometry") is not None:
+            gt = st.session_state.get("geom_type")
+            if gt == "point" and st.session_state.get("selected_point") is None:
+                st.session_state["selected_point"] = st.session_state["project_geometry"]
+            elif gt == "route" and st.session_state.get("selected_route") is None:
+                st.session_state["selected_route"] = st.session_state["project_geometry"]
+            elif gt == "boundary" and st.session_state.get("selected_boundary") is None:
+                st.session_state["selected_boundary"] = st.session_state["project_geometry"]
 
-    # Only display the expander when the relevant geometry for the project type exists.
-    if project_type.startswith("Site") and point_val is not None and has_any_geography:
-        _render_geographies_expander(show_routes=False)
+        # ------------------------------
+        # Route to selected mechanism
+        # ------------------------------
+        if project_type.startswith("Site"):
+            if option == "AASHTOWare":
+                aashtoware_point(
+                    points,
+                    container=geo_container,
+                )
+                st.session_state.selected_route = None
 
-    elif project_type.startswith("Route") and route_val is not None and has_any_geography:
-        _render_geographies_expander(show_routes=True)
+            elif option == "Upload Shapefile":
+                point_shapefile(container=geo_container)
+                st.session_state.selected_route = None
 
-    elif project_type.startswith("Boundary") and boundary_val is not None and has_any_geography:
-        _render_geographies_expander(show_routes=True)
+            elif option == "Select Point on Map":
+                draw_point(container=geo_container)
+                st.session_state.selected_route = None
 
+            elif option == "Enter Latitude/Longitude":
+                enter_latlng(container=geo_container)
+                st.session_state.selected_route = None
+
+        elif project_type.startswith("Route"):
+            if option == "AASHTOWare":
+                aashtoware_path(
+                    points,
+                    container=geo_container,
+                )
+
+            elif option == "Upload Shapefile":
+                polyline_shapefile(container=geo_container)
+                st.session_state.selected_point = None
+
+            elif option == "Draw Route on Map":
+                draw_line(container=geo_container)
+                st.session_state.selected_point = None
+
+        elif project_type.startswith("Boundary"):
+            if option == "Upload Shapefile":
+                polygon_shapefile(container=geo_container)
+                st.session_state.selected_point = None
+
+            elif option == "Draw Boundary on Map":
+                draw_boundary(container=geo_container)
+                st.session_state.selected_point = None
+
+        # ---------------------------------------------------------------------
+        # Read canonical geometry keys & check for presence
+        # ---------------------------------------------------------------------
+        point_val = st.session_state.get("selected_point")
+        route_val = st.session_state.get("selected_route")
+        boundary_val = st.session_state.get("selected_boundary")
+
+        # NEW/CHANGED: Invalidate if geometry changed after submit
+        cur_geom_sig = _geometry_signature(point_val, route_val, boundary_val)
+        if st.session_state.get("footprint_submitted") and (
+            cur_geom_sig != st.session_state.get("submitted_geom_sig")
+        ):
+            st.session_state["footprint_submitted"] = False
+
+        missing = (
+            (project_type.startswith("Site") and point_val is None) or
+            (project_type.startswith("Route") and route_val is None) or
+            (project_type.startswith("Boundary") and boundary_val is None)
+        )
+
+        if missing:
+            # Geometry was cleared (e.g., via your Clear button). Hide success and expander.
+            st.session_state["footprint_submitted"] = False
+            st.session_state["just_submitted_geometry"] = False
+
+            # Clear any previously computed geographies so the expander won't show stale/blank values.
+            for k in ("house_string", "senate_string", "borough_string", "region_string"):
+                if k in st.session_state:
+                    st.session_state[k] = None
+
+
+        else:
+            # Run queries only when geometry changes (existing util)
+            run_queries_if_geometry_changed(point_val, route_val, boundary_val)
+
+            # Read computed geography strings
+            house_val = st.session_state.get("house_string")
+            senate_val = st.session_state.get("senate_string")
+            borough_val = st.session_state.get("borough_string")
+            region_val = st.session_state.get("region_string")
+            has_any_geography = any([house_val, senate_val, borough_val, region_val])
+
+            st.write('')
+            if project_type.startswith("Site") and point_val is not None:
+                render_geographies_expander(show_routes=False)
+            elif project_type.startswith("Route") and route_val is not None:
+                render_geographies_expander(show_routes=False)
+            elif project_type.startswith("Boundary") and boundary_val is not None:
+                render_geographies_expander(show_routes=False)
+            
+
+            if has_any_geography:
+                # --- Single-click submit via placeholder swap (no behavior changes elsewhere) ---
+                submitted = bool(st.session_state.get("footprint_submitted", False))
+                btn_ph = st.empty()
+
+                def _render_submit_button(is_done: bool):
+                    label = "SUBMIT FOOTPRINT ✅" if is_done else "SUBMIT FOOTPRINT"
+                    suffix = "done" if is_done else "live"
+                    return btn_ph.button(
+                        label,
+                        use_container_width=True,
+                        key=f"submit_footprint_{version}_{suffix}",
+                        disabled=is_done,
+                    )
+
+                clicked = _render_submit_button(submitted)
+
+                if clicked and not submitted:
+                    # Determine canonical geometry & type based on current selection
+                    geom = None
+                    geom_type = None
+                    if project_type.startswith("Site") and point_val is not None:
+                        geom = point_val
+                        geom_type = "point"
+                    elif project_type.startswith("Route") and route_val is not None:
+                        geom = route_val
+                        geom_type = "route"
+                    elif project_type.startswith("Boundary") and boundary_val is not None:
+                        geom = boundary_val
+                        geom_type = "boundary"
+                    else:
+                        st.session_state["footprint_submitted"] = False
+                        st.error("Project type and footprint are inconsistent. Please reselect and submit again.")
+
+                    # Canonical storage
+                    st.session_state["project_geom"] = geom
+                    st.session_state["project_geom_type"] = geom_type
+
+                    # Persist user selections so controls reopen the same way
+                    st.session_state["project_type"] = project_type
+                    st.session_state["option"] = option
+
+                    # Keep selected_* so map components can repaint on return
+                    st.session_state["selected_point"] = point_val
+                    st.session_state["selected_route"] = route_val
+                    st.session_state["selected_boundary"] = boundary_val
+
+                    # Ensure AASHTOWare inputs remain available if applicable
+                    if option == "AASHTOWare" and project_type.startswith("Site"):
+                        _ = st.session_state.get("awp_dcml_mid_latitude")
+                        _ = st.session_state.get("awp_dcml_mid_longitude")
+                    if option == "AASHTOWare" and project_type.startswith("Route"):
+                        _ = st.session_state.get("awp_dcml_bop_latitude")
+                        _ = st.session_state.get("awp_dcml_bop_longitude")
+                        _ = st.session_state.get("awp_dcml_eop_latitude")
+                        _ = st.session_state.get("awp_dcml_eop_longitude")
+
+                    # Mark success
+                    st.session_state["footprint_submitted"] = True
+                    st.session_state["just_submitted_geometry"] = True
+
+                    # Snapshot what was submitted so we can detect changes later
+                    st.session_state["submitted_project_type"] = project_type
+                    st.session_state["submitted_option"] = option
+                    st.session_state["submitted_geom_sig"] = cur_geom_sig
+
+                    # Swap the live button with a disabled ✅ button immediately
+                    btn_ph.button(
+                        "SUBMIT FOOTPRINT ✅",
+                        use_container_width=True,
+                        key=f"submit_footprint_{version}_done",
+                        disabled=True,
+                    )
+
+            else:
+                st.session_state["footprint_submitted"] = False

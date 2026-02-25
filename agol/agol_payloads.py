@@ -59,7 +59,7 @@ import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
 import datetime
 from agol.agol_util import select_record, get_objectids_by_identifier
-from util.geospatial_util import GeometryUtil
+from util.geospatial_util import GeometryUtil, create_buffers
 
 # =============================================================================
 # PAYLOAD CLEANING / NORMALIZATION HELPERS
@@ -156,39 +156,6 @@ def str_to_int(value):
 
 
 
-def clean_payloads(payloads: dict) -> dict:
-    """
-    Remove any attribute entries marked as 'REMOVE'.
-
-    Why:
-        Some upstream flows may set an attribute to a sentinel string ("REMOVE")
-        to indicate it should not be written. This helper strips those values
-        while preserving any associated geometry.
-
-    Parameters:
-        payloads: dict
-            A dict of payload objects, each expected to contain a 'payload' with
-            an 'adds' list.
-
-    Returns:
-        dict: A new dict with filtered attributes.
-    """
-    cleaned = {}
-    for key, payload in payloads.items():
-        new_payload = payload.copy()
-        new_adds = []
-        for add in payload.get("payload", {}).get("adds", []):
-            attrs = add.get("attributes", {})
-            filtered_attrs = {k: v for k, v in attrs.items() if v != "REMOVE"}
-            # preserve geometry if present
-            new_add = {"attributes": filtered_attrs}
-            if "geometry" in add:
-                new_add["geometry"] = add["geometry"]
-            new_adds.append(new_add)
-        new_payload["payload"] = {"adds": new_adds}
-        cleaned[key] = new_payload
-    return cleaned
-
 
 # =============================================================================
 # PAYLOAD BUILDER: PROJECT
@@ -200,23 +167,86 @@ def clean_payloads(payloads: dict) -> dict:
 # =============================================================================
 def project_payload():
     try:
-        # Set GeometryUTIL
-        geom = GeometryUtil(epsg=4326)
-
+        
         # Determine center based on selected geometry
-        center = None
         if st.session_state.get("selected_point"):
-            pt = st.session_state["selected_point"]
-            st.session_state['center'] = geom.center(pt, 'point')
             proj_type = "Site"
         elif st.session_state.get("selected_route"):
-            route = st.session_state["selected_route"]
-            st.session_state['center'] =  geom.center(route, 'line')
             proj_type = "Route"
         elif st.session_state.get("selected_boundary"):
-            boundary = st.session_state["selected_boundary"]
-            st.session_state['center'] = geom.center(boundary, 'polygon')
             proj_type = "Boundary"
+
+
+        # Create Buffer Version of Geometry for Geospatial Base
+        geoms = st.session_state.get("project_geom")
+        geom_type = (st.session_state.get("project_geom_type") or "").lower()
+
+        if not geoms or not isinstance(geoms, (list, tuple)):
+            raise RuntimeError("No project geometries available in session.")
+        
+        # Normalize single point -> list of one point (NO ORDER SWAP)
+        if (
+            isinstance(geoms, (list, tuple))
+            and len(geoms) == 2
+            and all(isinstance(v, (int, float)) for v in geoms)
+        ):
+            geoms = [geoms]
+
+        # --- Split by kind (copying the impact_area method) ---
+        points, lines, polys = [], [], []
+
+        def _as_lonlat_pair(v):
+            return [float(v[0]), float(v[1])]
+
+        for item in geoms:
+            # POINT: [lon, lat]
+            if isinstance(item, (list, tuple)) and len(item) == 2 and all(isinstance(v, (int, float)) for v in item):
+                points.append(_as_lonlat_pair(item))
+            # LINE/POLY: [[lon, lat], ...]
+            elif (
+                isinstance(item, (list, tuple))
+                and item
+                and isinstance(item[0], (list, tuple))
+                and len(item[0]) == 2
+                and all(isinstance(v, (int, float)) for v in item[0])
+            ):
+                coords = [_as_lonlat_pair(p) for p in item]
+                is_closed = len(coords) >= 4 and coords[0] == coords[-1]
+                if is_closed:
+                    polys.append(coords)
+                else:
+                    lines.append(coords)
+
+        # --- Create buffers (10 m fixed) ---
+        buffers = []
+    
+        # If a single declared type is provided, respect it. Otherwise, rely on split result.
+        if geom_type in ("point",):
+            if points:
+                buffers += create_buffers(geometry_list=points, geom_type="point", distance_m=100)
+        elif geom_type in ("line", "linestring"):
+            if lines:
+                buffers += create_buffers(geometry_list=lines, geom_type="line", distance_m=50)
+        elif geom_type in ("polygon",):
+            if polys:
+                buffers += create_buffers(geometry_list=polys, geom_type="polygon", distance_m=1)
+        else:
+            # Fallback: make buffers for whatever was detected
+            if points:
+                buffers += create_buffers(geometry_list=points, geom_type="point", distance_m=100)
+            if lines:
+                buffers += create_buffers(geometry_list=lines, geom_type="line", distance_m=50)
+            if polys:
+                buffers += create_buffers(geometry_list=polys, geom_type="polygon", distance_m=1)
+
+        if not buffers:
+            raise RuntimeError("Buffering produced no output (check geometry and 10 m distance).")
+
+        # --- ESRI Polygon geometry (multipart via rings) ---
+        esri_polygon = {
+            "rings": buffers,  # list of rings (each is [[lon, lat], ...])
+            "spatialReference": {"wkid": 4326},
+        }
 
         # Build payload with .get() and default None
         payload = {
@@ -266,11 +296,7 @@ def project_payload():
                         "AWP_Contract_ID": st.session_state.get("awp_guid", None),
                         "AWP_Update": st.session_state.get("awp_update", None)
                     },
-                    "geometry": {
-                        "x": st.session_state['center'][0] if st.session_state['center'] else None,  # longitude
-                        "y": st.session_state['center'][1] if st.session_state['center'] else None,  # latitude
-                        "spatialReference": {"wkid": 4326}
-                    }
+                    "geometry": esri_polygon
                 }
             ]
         }
@@ -291,36 +317,14 @@ def project_payload():
 def geometry_payload():
     try:
         payloads = []  # final list of cleaned payloads
-
+    
         # ---------------------------------------------------------------------
         # POINT CASE
         # ---------------------------------------------------------------------
         if st.session_state.get("selected_point"):
             points = st.session_state["selected_point"]
 
-            def normalize_points(p):
-                """Extract all valid [lat, lon] pairs from any nesting depth."""
-                flat = []
-
-                def extract(item):
-                    # Case: valid coordinate pair
-                    if isinstance(item, (list, tuple)) and len(item) == 2 \
-                            and all(isinstance(v, (int, float)) for v in item):
-                        flat.append(item)
-                        return
-                    # Case: any iterable -> search deeper
-                    if isinstance(item, (list, tuple)):
-                        for sub in item:
-                            extract(sub)
-
-                extract(p)
-                return flat
-
-            flat_points = normalize_points(points)
-            if not flat_points:
-                raise ValueError("No valid point geometry found.")
-
-            for lat, lon in flat_points:
+            for lon, lat in points:
                 payload = {
                     "adds": [
                         {
@@ -341,6 +345,7 @@ def geometry_payload():
                         }
                     ]
                 }
+                
                 payloads.append(clean_payload(payload))
             return payloads
 
@@ -348,37 +353,9 @@ def geometry_payload():
         # ROUTE CASE (POLYLINES)
         # ---------------------------------------------------------------------
         elif st.session_state.get("selected_route"):
-            route = st.session_state["selected_route"]
+            routes = st.session_state["selected_route"]
 
-            # --- FIXED NORMALIZER ---
-            def normalize_paths(r):
-                """
-                Ensures the route is a list of paths, each path a list of [lat, lon] pairs.
-                Removes extra nesting and enforces correct structure.
-                """
-                # Case 1: Single path: [[lat, lon], [lat, lon]]
-                if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in r):
-                    return [r]
-
-                # Case 2: Already list of paths
-                cleaned = []
-                for item in r:
-                    if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in item):
-                        cleaned.append(item)
-                    else:
-                        # Flatten one more level if needed
-                        for sub in item:
-                            if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in sub):
-                                cleaned.append(sub)
-                return cleaned
-
-            # Normalize input geometry
-            paths_latlon = normalize_paths(route)
-
-            # Build payloads
-            for path in paths_latlon:
-                # Convert [lat, lon] → [x, y] = [lon, lat]
-                agol_path = [[pt[1], pt[0]] for pt in path]
+            for route in routes:
                 payload = {
                     "adds": [
                         {
@@ -392,7 +369,7 @@ def geometry_payload():
                                 "parentglobalid": st.session_state.get("apex_globalid", None)
                             },
                             "geometry": {
-                                "paths": [agol_path],  # ← now correct, no extra nesting
+                                "paths": [route],
                                 "spatialReference": {"wkid": 4326}
                             }
                         }
@@ -405,26 +382,9 @@ def geometry_payload():
         # BOUNDARY CASE (POLYGONS)
         # ---------------------------------------------------------------------
         elif st.session_state.get("selected_boundary"):
-            boundary = st.session_state["selected_boundary"]
-
-            def normalize_to_rings(b):
-                if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in b):
-                    return [b]
-                rings = []
-                for item in b:
-                    if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in item):
-                        rings.append(item)
-                    else:
-                        for sub in item:
-                            if all(isinstance(pt, (list, tuple)) and len(pt) == 2 for pt in sub):
-                                rings.append(sub)
-                return rings
-
-            rings_latlon = normalize_to_rings(boundary)
-            for ring in rings_latlon:
-                converted = [[pt[1], pt[0]] for pt in ring]
-                if converted[0] != converted[-1]:
-                    converted.append(converted[0])
+            boundaries = st.session_state["selected_boundary"]
+            
+            for ring in boundaries:
                 payload = {
                     "adds": [
                         {
@@ -438,7 +398,7 @@ def geometry_payload():
                                 "parentglobalid": st.session_state.get("apex_globalid", None)
                             },
                             "geometry": {
-                                "rings": [converted],
+                                "rings": [ring],
                                 "spatialReference": {"wkid": 4326}
                             }
                         }
@@ -455,6 +415,65 @@ def geometry_payload():
     except Exception as e:
         st.error(f"Error building geometry payload: {e}")
         return None
+
+
+
+
+def location_payload():
+    """
+    Build an AGOL-ready 'adds' payload from session-state inputs:
+      - st.session_state["projects_geom"]: geometry(ies) in [lon, lat]
+      - st.session_state["projects_geom_type"]: 'point' | 'line'/'linestring' | 'polygon'
+
+    Steps:
+      1) Split geoms into points/lines/polys (same pattern as impact_area).
+      2) Create buffers per kind using create_buffers(...) with fixed 10 m.
+      3) Combine rings into a single ESRI Polygon geometry (multipart).
+      4) Build and return the applyEdits payload with Impact_Area attributes.
+    """
+    try:
+         # Set GeometryUTIL
+        geom = GeometryUtil(epsg=4326)
+
+        # Determine center based on selected geometry
+        if st.session_state.get("selected_point"):
+            pt = st.session_state["selected_point"]
+            st.session_state['center'] = geom.center(pt, 'point')
+        elif st.session_state.get("selected_route"):
+            route = st.session_state["selected_route"]
+            st.session_state['center'] =  geom.center(route, 'line')
+        elif st.session_state.get("selected_boundary"):
+            boundary = st.session_state["selected_boundary"]
+            st.session_state['center'] = geom.center(boundary, 'polygon')
+
+
+        # --- Build payload with Impact_Area attribute schema ---
+        payload = {
+            "adds": [
+                {
+                    "attributes": {
+                        "Location_AWP_Proj_Name": st.session_state.get("awp_proj_name", None),
+                        "Location_Area_Proj_Name": st.session_state.get("proj_name", None),
+                        "Location_Area_DOT_PF_Region": st.session_state.get("region_string", None),
+                        "Location_Area_Borough_Census_Area": st.session_state.get("borough_string", None),
+                        "Location_Area_Senate_District": st.session_state.get("senate_string", None),
+                        "Location_Area_House_District": st.session_state.get("house_string", None),
+                        "parentglobalid": st.session_state.get("apex_globalid", None)
+                    },
+                    "geometry": {
+                        "x": st.session_state['center'][0] if st.session_state['center'] else None,  # longitude
+                        "y": st.session_state['center'][1] if st.session_state['center'] else None,  # latitude
+                        "spatialReference": {"wkid": 4326}
+                        
+                    }
+                }
+            ]
+        }
+
+        return clean_payload(payload)
+
+    except Exception as e:
+        raise RuntimeError(f"Error building buffered project polygon payload: {e}")
 
 
 # =============================================================================
@@ -556,9 +575,7 @@ def geography_payload(name: str):
     # -------------------------------------------------------------------------
     if name == 'region':
         id_list = st.session_state.get(f"{name}_list")
-        if not id_list:
-            print(None)
-
+    
         payload = {"adds": []}
         for item_id in id_list:
             # Query record from AGOL service
@@ -583,14 +600,11 @@ def geography_payload(name: str):
                 "geometry": geom
             })
 
-
     # -------------------------------------------------------------------------
     # BOROUGH
     # -------------------------------------------------------------------------
     if name == 'borough':
         id_list = st.session_state.get(f"{name}_list")
-        if not id_list:
-            print(None)
 
         payload = {"adds": []}
         for item_id in id_list:
@@ -684,80 +698,151 @@ def geography_payload(name: str):
                 "geometry": geom
             })
 
-    # -------------------------------------------------------------------------
-    # ROUTE (IMPACTED ROUTES)
-    # -------------------------------------------------------------------------
-    if name == 'route':
-        id_list = st.session_state.get(f"{name}_list")
-        if not id_list:
-            print(None)
-    
-        payload = {"adds": []}
-        for item_id in id_list:
-            data = select_record(
-                url = st.session_state['route_intersect']['url'],
-                layer = st.session_state['route_intersect']['layer'],
-                id_field = "Route_ID", 
-                id_value = str(item_id), 
-                fields="*", 
-                return_geometry=True
-            )
-            if not data:
-                continue
-            attrs = data[0].get("attributes", {})
-            geom = data[0].get("geometry", {})
-            route_id = attrs.get("Route_ID")
-            route_name = attrs.get("Route_Name")
-            payload["adds"].append({
-                "attributes": {
-                    "Impacted_Route_ID": route_id,
-                    "Impacted_Route_Name": route_name,
-                    "parentglobalid": st.session_state.get("apex_globalid", None),
-                },
-                "geometry": geom
-            })
+    return clean_payload(payload)
 
-
-    # Return cleaned payload
-    if payload == {}:
-        return None
-    else:
-        return clean_payload(payload)
     
 
-def ti_card_payload():
+
+def traffic_impact_payload():
     try:
-        # Set GeometryUTIL
-        geom = GeometryUtil(epsg=4326)
+        if st.session_state.get("project_traffic_impact_area"):
+            area = st.session_state["project_traffic_impact_area"]
+        else:
+            raise ValueError("No traffic impact area geometry selected.")
 
-        # Determine center based on selected geometry
-        if st.session_state.get("selected_point"):
-            pt = st.session_state["selected_point"]
-            st.session_state['buffer'] = geom.buffer(pt, 'point', distance_m=.005)
-        elif st.session_state.get("selected_route"):
-            route = st.session_state["selected_route"]
-            st.session_state['buffer'] =  geom.buffer(route, 'line', distance_m=.005)
-        elif st.session_state.get("selected_boundary"):
-            boundary = st.session_state["selected_boundary"]
-            st.session_state['buffer'] = geom.buffer(boundary, 'polygon', distance_m=.005)
-        # Build payload with .get() and default None
         payload = {
             "adds": [
                 {
                     "attributes": {
-                        "Traffic_Impact_AWP_Proj_Name": st.session_state.get("awp_proj_name", None),
-                        "Traffic_Impact_Proj_Name": st.session_state.get("proj_name", None),
-                        "Traffic_Impact_New_Card": "Yes",
-                        "parentglobalid": st.session_state.get("apex_globalid", None),
+                        "Event_Name": f"Traffic Impact @ {st.session_state.get('project_impact_route_name')}",
+                        "AWP_Proj_Name": st.session_state.get("awp_proj_name"),
+                        "Proj_Name": st.session_state.get("proj_name"),
+                        "Route_ID": st.session_state.get("project_impact_route_id"),
+                        "Route_Name": st.session_state.get("project_impact_route_name"),
+                        "Start_X": st.session_state.get("project_impact_start_point_x"),
+                        "Start_Y": st.session_state.get("project_impact_start_point_y"),
+                        "End_X": st.session_state.get("project_impact_end_point_x"),
+                        "End_Y": st.session_state.get("project_impact_end_point_y"),
+                        "Event_Type": "Roadwork / Maintenance",
+                        "Assignee": "Unassigned",
+                        "Alaska_511": "No",
+                        "APEX_GUID": st.session_state.get("apex_globalid").strip("{}"),
+                        "APEX_Database_Status": "Review: Awaiting Review"
                     },
-                    "geometry": st.session_state['buffer']  #Package already contains rings and spatial reference
+                    "geometry": {
+                        "rings": area,   # Matches Boundary Example
+                        "spatialReference": {"wkid": 4326}
+                    }
+                }
+            ]
+        }
+
+        return clean_payload(payload)
+
+    except Exception as e:
+        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
+
+    
+
+
+def traffic_impact_route_payload():
+    try:
+        # Ensure geometry exists
+        if not st.session_state.get("project_impacted_route"):
+            raise ValueError("No traffic impact route geometry selected.")
+
+        path = st.session_state.get("project_impacted_route")
+        
+        payload = {
+            "adds": [
+                {
+                    "attributes": {
+                        "parentglobalid": st.session_state.get("traffic_impact_globalid"),
+                    },
+                    "geometry": {
+                        "paths": [path],
+                        "spatialReference": {"wkid": 4326}
+                    }
                 }
             ]
         }
         return clean_payload(payload)
+
     except Exception as e:
-        # Bubble up error so caller can handle with st.error
-        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
+        raise RuntimeError(f"Error building Traffic Impact Route Payload: {e}")
+
+
+
+
+def traffic_impact_start_point_payload():
+    try:
+        # Ensure geometry exists
+        if not st.session_state.get("project_impact_start_point"):
+            raise ValueError("No traffic impact start point geometry selected.")
+        
+        points = st.session_state["project_impact_start_point"]
+        
+        if not points:
+            raise ValueError("No valid start point geometry found.")
+
+        # Build payloads for each point
+        for lon, lat in points:
+            payload = {
+                "adds": [
+                    {
+                        "attributes": {
+                            "parentglobalid": st.session_state.get("traffic_impact_globalid"),
+                        },
+                        "geometry": {
+                            "x": float(lon),   # lon = x
+                            "y": float(lat),   # lat = y
+                            "spatialReference": {"wkid": 4326}
+                        }
+                    }
+                ]
+            }
+        return clean_payload(payload)
+
+    except Exception as e:
+        raise RuntimeError(f"Error building Traffic Impact Start Point Payload: {e}")
+
+
+
+
+def traffic_impact_end_point_payload():
+    try:
+        # Ensure geometry exists
+        if not st.session_state.get("project_impact_end_point"):
+            raise ValueError("No traffic impact end point geometry selected.")
+
+        
+        points = st.session_state["project_impact_end_point"]
+    
+
+        if not points:
+            raise ValueError("No valid end point geometry found.")
+
+        # Build payloads for each point
+        for lon, lat in points:
+            payload = {
+                "adds": [
+                    {
+                        "attributes": {
+                            "parentglobalid": st.session_state.get("traffic_impact_globalid"),
+                        },
+                        "geometry": {
+                            "x": float(lon),   # lon = x
+                            "y": float(lat),   # lat = y
+                            "spatialReference": {"wkid": 4326}
+                        }
+                    }
+                ]
+            }
+
+        return clean_payload(payload)
+
+    except Exception as e:
+        raise RuntimeError(f"Error building Traffic Impact End Point Payload: {e}")
     
 
 
