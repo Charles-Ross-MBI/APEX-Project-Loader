@@ -66,85 +66,105 @@ def session_selectbox(
     return st.session_state[key]
 
 
-# =============================================================================
-# FORM SUBSECTION: IMPACTED COMMUNITIES (MULTISELECT)
-# =============================================================================
-# - Pulls communities from ArcGIS FeatureServer via get_multiple_fields()
-# - Persists selections per source (awp vs ui)
-# - Mirrors current selection into legacy keys for downstream compatibility
-# =============================================================================
-def impacted_comms_select(is_awp: bool = False):
-    """Multiselect for impacted communities.
 
-    IMPORTANT: selections are *source-specific*.
-    - User Input selections do not bleed into AASHTOWare selections (and vice-versa).
-    - We persist into dedicated session_state keys per source:
-        * ui_impact_comm_ids / ui_impact_comm_names / ui_impact_comm
-        * awp_impact_comm_ids / awp_impact_comm_names / awp_impact_comm
-    - For backwards compatibility with downstream code, we also mirror the *current* selection
-      into the legacy shared keys: impact_comm_ids / impact_comm_names / impact_comm.
+
+
+def impacted_comms_select(container=None, label="Select community:"):
     """
+    Simple dropdown that PRESERVES original population behavior and can be mounted into a container.
 
+    Args:
+        container: A Streamlit container-like target to render into (e.g., st.sidebar, col1, st.container()).
+                   If None, defaults to st.
+        label:     Widget label.
+
+    Returns:
+        {"name": <str>, "id": <any>} or None
+    """
+    # version for widget_key
     version = st.session_state.get("form_version", 0)
-    src = "awp" if is_awp else "ui"
 
-    # Source-specific persistence keys
-    ids_key = f"{src}_impact_comm_ids"
-    names_key = f"{src}_impact_comm_names"
-    value_key = f"{src}_impact_comm"
-
-    # Data source for communities (ArcGIS FeatureServer)
-    comms_url = st.session_state['communities']
-    comms_list = get_multiple_fields(comms_url, 7, ["OverallName", "DCCED_CommunityId"]) or []
-
-    # Build lookups:
-    # - name_to_id: display name => unique community ID
-    # - id_to_name: reverse mapping used for restoring selections
-    name_to_id = {
-        c["OverallName"]: c["DCCED_CommunityId"]
-        for c in comms_list
-        if c.get("OverallName") and c.get("DCCED_CommunityId")
-    }
-    id_to_name = {v: k for k, v in name_to_id.items()}
-
-    # Restore previous selections (SOURCE-SPECIFIC)
-    prev_ids = st.session_state.get(ids_key, []) or []
-    prev_names_raw = st.session_state.get(names_key, "") or ""
-
-    # names may be stored as comma-separated string
-    if isinstance(prev_names_raw, str):
-        prev_names = [n.strip() for n in prev_names_raw.split(",") if n.strip()]
-    else:
-        prev_names = list(prev_names_raw) if prev_names_raw else []
-
-    # Prefer restoration from IDs; fallback to stored names
-    default_names_from_ids = [id_to_name[i] for i in prev_ids if i in id_to_name]
-    default_names_fallback = [n for n in prev_names if n in name_to_id]
-    default_names = default_names_from_ids or default_names_fallback
-
-    # UI: multiselect widget
-    selected_names = st.multiselect(
-        "Select communities:",
-        options=sorted(name_to_id.keys()),
-        default=sorted(default_names),
-        key=widget_key(f"{src}_impact_comm", version, is_awp),
-        help="Choose one or more communities impacted by the project.",
+    # Source configuration (same keys you already use)
+    comms_url = (
+        st.session_state.get("communities_url")
+        or st.session_state.get("dcced_communities_url")
+        or None
+    )
+    lyr_idx = int(
+        st.session_state.get("communities_layer")
+        or st.session_state.get("dcced_communities_layer")
+        or 7
+    )
+    id_field = (
+        st.session_state.get("communities_id_field")
+        or st.session_state.get("dcced_communities_id_field")
+        or "DCCED_CommunityId"
     )
 
-    # Translate selection => IDs for storage/processing
-    selected_ids = [name_to_id[n] for n in selected_names if n in name_to_id]
+    # Build options as (name, id)
+    options = []  # list[(str name, any id)]
+    if isinstance(comms_url, str) and comms_url:
+        try:
+            # get_multiple_fields(url, layer_index, fields_list) -> list[dict]
+            rows = get_multiple_fields(comms_url, lyr_idx, ["OverallName", id_field]) or []
+            for c in rows:
+                name = c.get("OverallName")
+                # tolerate field-name variance but still prefer configured id_field
+                cid = c.get(id_field) or c.get("DCCED_CommunityId") or c.get("DCCED_CommunityID")
+                if name and cid is not None:
+                    options.append((name, cid))
+        except Exception as e:
+            st.warning(f"Communities list not loaded: {e}")
 
-    # Persist per source (this prevents bleed between modes)
-    st.session_state[ids_key] = selected_ids
-    st.session_state[names_key] = ",".join(selected_names)
-    st.session_state[value_key] = selected_ids
+    # Fallback to any preloaded list
+    if not options:
+        fallback = (
+            st.session_state.get("dcced_communities_list")
+            or st.session_state.get("communities_list")
+            or []
+        )
+        for c in fallback:
+            name = c.get("OverallName")
+            cid = c.get(id_field) or c.get("DCCED_CommunityId") or c.get("DCCED_CommunityID")
+            if name and cid is not None:
+                options.append((name, cid))
 
-    # Mirror into legacy/shared keys for downstream compatibility (current source only)
-    st.session_state["impact_comm_ids"] = selected_ids
-    st.session_state["impact_comm_names"] = ",".join(selected_names)
-    st.session_state["impact_comm"] = selected_ids
+    names = [n for (n, _cid) in options]
+    name_to_id = dict(options)
+    id_to_name = {cid: n for (n, cid) in options}
 
-    return selected_ids
+    # decide where to render
+    target = container if container is not None else st
+
+    # if no options, draw disabled selectbox and bail
+    if not names:
+        target.selectbox(
+            label,
+            options=["— no communities available —"],
+            key=f"{widget_key('impact_comm', version)}::empty",
+            disabled=True,
+        )
+        return None
+
+    # use prior id ONLY to set default index (no writes)
+    prev_id = st.session_state.get("impact_comm_id")
+    default_name = id_to_name.get(prev_id)
+    index = names.index(default_name) if (default_name in names) else 0
+
+    # make key change when options change to avoid stale UI
+    opt_fingerprint = f"{len(names)}::{hash(tuple(names[:10]))}"
+    select_key = f"{widget_key('impact_comm', version)}::{opt_fingerprint}"
+
+    selected_name = target.selectbox(
+        label,
+        options=names,
+        index=index,
+        key=select_key,
+        help="Choose the community impacted by the project.",
+    )
+    selected_id = name_to_id.get(selected_name)
+    return {"name": selected_name, "id": selected_id}
+
 
 
 # =============================================================================

@@ -67,35 +67,89 @@ from util.geospatial_util import center_of_geometry, create_buffers
 # These helpers standardize outgoing payloads:
 # - Remove empty values that should not be written (None/0/"")
 # - Remove sentinel values used to indicate explicit removal ("REMOVE")
+# - Support adds, updates, and deletes sections
 # =============================================================================
-def clean_payload(payload: dict) -> dict:
+def clean_payload(payload: dict, edit_type = None) -> dict:
     """
-    Remove any attributes set to None, 0, or ''.
+    Normalize and clean an ArcGIS applyEdits payload.
 
-    Why:
-        ArcGIS applyEdits payloads are sensitive to "empty" values. Filtering
-        these prevents overwriting or storing meaningless defaults.
+    Behavior:
+      - If edit_type is provided, clean only that section.
+      - If edit_type is None, infer from keys present: adds > updates > deletes.
+      - For adds/updates: remove attributes where value is None, 0, "", or "REMOVE".
+      - For deletes: ensure a compact list of valid objectIds.
 
-    Parameters:
-        payload: dict
-            A standard applyEdits-like payload dict containing 'adds'.
+    Parameters
+    ----------
+    payload : dict
+        A dict shaped like an applyEdits payload containing one of:
+        - {"adds":    [{"attributes": {...}, "geometry": {...}}, ...]}
+        - {"updates": [{"attributes": {...}, "geometry": {...}}, ...]}
+        - {"deletes": [1, 2, 3]}
+    edit_type : str | None
+        One of "adds", "updates", "deletes", or None to infer.
 
-    Returns:
-        dict: A cleaned payload with filtered 'attributes' per add entry.
+    Returns
+    -------
+    dict
+        The cleaned payload.
     """
-    cleaned = dict(payload)
-    new_adds = []
-    for add in payload.get("adds", []):
-        attrs = add.get("attributes", {})
-        filtered_attrs = {
-            k: v for k, v in attrs.items()
-            if v is not None and v != 0 and v != ""
+    if not isinstance(payload, dict):
+        return payload
+
+    # Infer edit type if not supplied
+    et = (edit_type or "").lower() if isinstance(edit_type, str) else None
+    if et not in ("adds", "updates", "deletes"):
+        if "adds" in payload:
+            et = "adds"
+        elif "updates" in payload:
+            et = "updates"
+        elif "deletes" in payload:
+            et = "deletes"
+        else:
+            # Nothing recognizable; return as-is
+            return payload
+
+    cleaned = dict(payload)  # shallow copy
+
+    def _filter_attrs(attrs: dict) -> dict:
+        if not isinstance(attrs, dict):
+            return {}
+        return {
+            k: v
+            for k, v in attrs.items()
+            if v is not None and v != "" and v != 0 and v != "REMOVE"
         }
-        new_add = dict(add)
-        new_add["attributes"] = filtered_attrs
-        new_adds.append(new_add)
-    cleaned["adds"] = new_adds
-    return cleaned
+
+    if et in ("adds", "updates"):
+        items = []
+        for rec in payload.get(et, []) or []:
+            rec_clean = dict(rec) if isinstance(rec, dict) else {}
+            # Clean attributes
+            rec_clean["attributes"] = _filter_attrs(rec_clean.get("attributes", {}))
+            # Drop empty geometry dicts
+            geom = rec_clean.get("geometry", None)
+            if isinstance(geom, dict) and not geom:
+                rec_clean.pop("geometry", None)
+            items.append(rec_clean)
+        cleaned[et] = items
+        # Preserve other sections unmodified if present
+        for other in ("adds", "updates", "deletes"):
+            if other in cleaned and other != et:
+                cleaned[other] = payload.get(other)
+        return cleaned
+
+    if et == "deletes":
+        ids = payload.get("deletes", [])
+        if not isinstance(ids, (list, tuple)):
+            ids = [ids]
+        # Keep only truthy, non-empty IDs
+        cleaned_ids = [oid for oid in ids if oid not in (None, "")]
+        return {"deletes": cleaned_ids}
+
+    # Fallback: return as-is if something unexpected happens
+    return payload
+
 
 
 def to_date_string(value):
@@ -300,7 +354,7 @@ def project_payload():
                 }
             ]
         }
-        return clean_payload(payload)
+        return clean_payload(payload, 'adds')
     except Exception as e:
         # Bubble up error so caller can handle with st.error
         raise RuntimeError(f"Error building project payload: {e}")
@@ -468,7 +522,7 @@ def location_payload():
             ]
         }
 
-        return clean_payload(payload)
+        return clean_payload(payload, 'adds')
 
     except Exception as e:
         raise RuntimeError(f"Error building buffered project polygon payload: {e}")
@@ -533,7 +587,7 @@ def communities_payload():
             # Valid case: no usable community records
             return None
 
-        return clean_payload(payload)
+        return clean_payload(payload, 'adds')
     except Exception as e:
         st.error(f"Error building communities payload: {e}")
         return
@@ -696,153 +750,303 @@ def geography_payload(name: str):
                 "geometry": geom
             })
 
-    return clean_payload(payload)
+    return clean_payload(payload, 'adds')
 
     
 
 
-def traffic_impact_payload():
-    try:
-        if st.session_state.get("project_traffic_impact_area"):
-            area = st.session_state["project_traffic_impact_area"]
+def traffic_impact_payloads(package: dict, edit_type=None, which: str = "all") -> dict:
+    """
+    Build ArcGIS applyEdits payloads for:
+      - parent (Traffic Impact polygon)
+      - route  (polyline child)
+      - start  (start point child)
+      - end    (end point child)
+
+    Data source:
+    * Everything comes from the provided `package` (single source of truth).
+    * For updates, objectids are taken from the package if present:
+        - parent: package["objectid"]
+        - route : package["route_objectid"]
+        - start : package["start_objectid"]
+        - end   : package["end_objectid"]
+    * For adds to child layers, attributes MUST include:
+        {"parentglobalid": st.session_state["traffic_impact_globalid"]}
+
+    Geometry expectations (all in [lon, lat]):
+    * parent polygon: package["area"]            -> {"rings": ...}
+    * route polyline: package["route_geom"]      -> {"paths": [route_geom]}
+    * start point   : package["start_point"]["lonlat"] -> {"x": lon, "y": lat}
+    * end point     : package["end_point"]["lonlat"]   -> {"x": lon, "y": lat}
+
+    Parameters
+    ----------
+    package : dict
+    edit_type : {'adds','updates','deletes'} | None
+        If None, infer as:
+          - 'deletes' if package.get('delete') or package.get('action') in ('delete','deletes')
+          - 'updates' if any objectid is present in package
+          - else 'adds'
+    which : {'all','parent','children'}
+        'all'      -> return parent + route + start + end
+        'parent'   -> return parent only
+        'children' -> return route + start + end only
+
+    Returns
+    -------
+    dict with selected payload dicts, e.g.:
+      {
+        "parent": {<applyEdits section>},
+        "route" : {<applyEdits section>},
+        "start" : {<applyEdits section>},
+        "end"   : {<applyEdits section>}
+      }
+    """
+    import streamlit as st
+
+    if not isinstance(package, dict):
+        raise ValueError("package must be a dict produced by the selector")
+
+    which = (which or "all").strip().lower()
+    if which not in ("all", "parent", "children"):
+        raise ValueError("which must be one of: 'all', 'parent', 'children'")
+
+    # ---- helpers ----
+    def _et_infer():
+        if package.get("delete") or package.get("action") in ("delete", "deletes"):
+            return "deletes"
+        if any(
+            k in package and package.get(k) not in (None, "", 0)
+            for k in ("objectid", "route_objectid", "start_objectid", "end_objectid")
+        ):
+            return "updates"
+        return "adds"
+
+    et = (edit_type or _et_infer()).strip().lower()
+    if et in ("update",):
+        et = "updates"
+    if et in ("delete",):
+        et = "deletes"
+    if et not in ("adds", "updates", "deletes"):
+        raise ValueError("edit_type must be 'adds', 'updates', or 'deletes'")
+
+    # Extract core pieces once
+    area       = package.get("area") or package.get("impact_area")
+    route_geom = package.get("route_geom")
+    sp         = (package.get("start_point") or {}).get("lonlat")
+    ep         = (package.get("end_point")  or {}).get("lonlat")
+
+    parent_oid = (
+        package.get("objectid")
+        or package.get("OBJECTID")
+        or package.get("objectId")
+        or package.get("ti_objectid")
+    )
+    route_oid  = package.get("route_objectid") or package.get("routeObjectId") or package.get("route_OBJECTID")
+    start_oid  = package.get("start_objectid") or package.get("startObjectId") or package.get("start_OBJECTID")
+    end_oid    = package.get("end_objectid")   or package.get("endObjectId")   or package.get("end_OBJECTID")
+
+    # Common field extras (attributes pulled only from package)
+    route_id   = package.get("route_id")
+    route_name = package.get("route_name")
+    event_name = package.get("name") or (f"Traffic Impact @ {route_name}" if route_name else "Traffic Impact")
+
+    out: dict = {}
+
+    # -------------------------
+    # PARENT PAYLOAD (polygon)
+    # -------------------------
+    if which in ("all", "parent"):
+        if et == "deletes":
+            if parent_oid is None:
+                raise ValueError("Parent delete requires package['objectid'].")
+            parent_payload = {"deletes": [parent_oid]}
         else:
-            raise ValueError("No traffic impact area geometry selected.")
+            # adds/updates require geometry
+            if not area:
+                raise ValueError("Parent polygon requires package['area'] (rings).")
+            parent_geom = {"rings": area, "spatialReference": {"wkid": 4326}}
 
-        payload = {
-            "adds": [
-                {
-                    "attributes": {
-                        "Event_Name": f"Traffic Impact @ {st.session_state.get('project_impact_route_name')}",
-                        "AWP_Proj_Name": st.session_state.get("awp_proj_name"),
-                        "Proj_Name": st.session_state.get("proj_name"),
-                        "Route_ID": st.session_state.get("project_impact_route_id"),
-                        "Route_Name": st.session_state.get("project_impact_route_name"),
-                        "Start_X": st.session_state.get("project_impact_start_point_x"),
-                        "Start_Y": st.session_state.get("project_impact_start_point_y"),
-                        "End_X": st.session_state.get("project_impact_end_point_x"),
-                        "End_Y": st.session_state.get("project_impact_end_point_y"),
-                        "Event_Type_COMM": "Roadwork / Maintenance",
-                        "Assignee": "Unassigned",
-                        "Alaska_511_COMM": "No", 
-                        "Alaska_511": "No",
-                        "APEX_GUID": st.session_state.get("apex_globalid").strip("{}"),
-                        "APEX_Database_Status": "Review: Awaiting Review"
-                    },
-                    "geometry": {
-                        "rings": area,   # Matches Boundary Example
-                        "spatialReference": {"wkid": 4326}
-                    }
+            if et == "adds":
+                # attributes only from package; clean_payload will strip Nones
+                parent_attrs = {
+                    "Event_Name":  event_name,
+                    "Route_ID":    route_id,
+                    "Route_Name":  route_name,
+                    "Start_X":     (sp[0] if isinstance(sp, (list, tuple)) and len(sp) == 2 else None),
+                    "Start_Y":     (sp[1] if isinstance(sp, (list, tuple)) and len(sp) == 2 else None),
+                    "End_X":       (ep[0] if isinstance(ep, (list, tuple)) and len(ep) == 2 else None),
+                    "End_Y":       (ep[1] if isinstance(ep, (list, tuple)) and len(ep) == 2 else None),
+                    "Alaska_511_COMM": "No",
+                    "Alaska_511": "No",
+                    "APEX_GUID":    st.session_state.get("apex_guid"),
+                    "AWP_Proj_Name": st.session_state.get("apex_awp_name"),
+                    "Proj_Name": st.session_state.get("apex_proj_name"),
+                    "APEX_Database_Status": st.session_state.get("apex_database_status")
                 }
-            ]
-        }
+                parent_payload = {"adds": [{"attributes": parent_attrs, "geometry": parent_geom}]}
+            else:  # updates
+                if parent_oid is None:
+                    raise ValueError("Parent update requires package['objectid'].")
+                if not (isinstance(sp, (list, tuple)) and len(sp) == 2):
+                    raise ValueError("Parent update requires start_point.lonlat [lon, lat].")
+                if not (isinstance(ep, (list, tuple)) and len(ep) == 2):
+                    raise ValueError("Parent update requires end_point.lonlat [lon, lat].")
 
-        return clean_payload(payload)
-
-    except Exception as e:
-        raise RuntimeError(f"Error building Traffic Impact Payload: {e}")
-
-    
-
-
-def traffic_impact_route_payload():
-    try:
-        # Ensure geometry exists
-        if not st.session_state.get("project_impacted_route"):
-            raise ValueError("No traffic impact route geometry selected.")
-
-        path = st.session_state.get("project_impacted_route")
-        
-        payload = {
-            "adds": [
-                {
-                    "attributes": {
-                        "parentglobalid": st.session_state.get("traffic_impact_globalid"),
-                    },
-                    "geometry": {
-                        "paths": [path],
-                        "spatialReference": {"wkid": 4326}
-                    }
+                parent_attrs = {
+                    "objectId":  parent_oid,
+                    "Event_Name": event_name,
+                    "Route_ID":   route_id,
+                    "Route_Name": route_name,
+                    "Start_X":    sp[0],
+                    "Start_Y":    sp[1],
+                    "End_X":      ep[0],
+                    "End_Y":      ep[1],
                 }
-            ]
-        }
-        return clean_payload(payload)
+                parent_payload = {"updates": [{"attributes": parent_attrs, "geometry": parent_geom}]}
 
-    except Exception as e:
-        raise RuntimeError(f"Error building Traffic Impact Route Payload: {e}")
+        def _clean_parent(p):
+            return clean_payload(p, et) if "clean_payload" in globals() else p
+
+        out["parent"] = _clean_parent(parent_payload)
+
+    # ---------------------------------
+    # CHILDREN (route, start, end)
+    # ---------------------------------
+    if which in ("all", "children"):
+        # ROUTE (polyline)
+        if et == "deletes":
+            if route_oid is None:
+                raise ValueError("Route delete requires package['route_objectid'].")
+            route_payload = {"deletes": [route_oid]}
+        else:
+            if not (isinstance(route_geom, (list, tuple)) and len(route_geom) >= 2):
+                raise ValueError("Route geometry requires package['route_geom'] as a list of [lon, lat] pairs.")
+            route_geo = {"paths": [route_geom], "spatialReference": {"wkid": 4326}}
+            if et == "adds":
+                route_attrs = {"parentglobalid": st.session_state.get("traffic_impact_globalid")}
+                if not route_attrs["parentglobalid"]:
+                    raise ValueError("Adds require st.session_state['traffic_impact_globalid'] for child layers.")
+                route_payload = {"adds": [{"attributes": route_attrs, "geometry": route_geo}]}
+            else:
+                if route_oid is None:
+                    raise ValueError("Route update requires package['route_objectid'].")
+                route_attrs = {"objectId": route_oid}
+                route_payload = {"updates": [{"attributes": route_attrs, "geometry": route_geo}]}
+
+        # START (point)
+        if et == "deletes":
+            if start_oid is None:
+                raise ValueError("Start-point delete requires package['start_objectid'].")
+            start_payload = {"deletes": [start_oid]}
+        else:
+            if not (isinstance(sp, (list, tuple)) and len(sp) == 2):
+                raise ValueError("Start-point requires package['start_point']['lonlat'] as [lon, lat].")
+            start_geo = {"x": float(sp[0]), "y": float(sp[1]), "spatialReference": {"wkid": 4326}}
+            if et == "adds":
+                start_attrs = {"parentglobalid": st.session_state.get("traffic_impact_globalid")}
+                if not start_attrs["parentglobalid"]:
+                    raise ValueError("Adds require st.session_state['traffic_impact_globalid'] for child layers.")
+                start_payload = {"adds": [{"attributes": start_attrs, "geometry": start_geo}]}
+            else:
+                if start_oid is None:
+                    raise ValueError("Start-point update requires package['start_objectid'].")
+                start_attrs = {"objectId": start_oid}
+                start_payload = {"updates": [{"attributes": start_attrs, "geometry": start_geo}]}
+
+        # END (point)
+        if et == "deletes":
+            if end_oid is None:
+                raise ValueError("End-point delete requires package['end_objectid'].")
+            end_payload = {"deletes": [end_oid]}
+        else:
+            if not (isinstance(ep, (list, tuple)) and len(ep) == 2):
+                raise ValueError("End-point requires package['end_point']['lonlat'] as [lon, lat].")
+            end_geo = {"x": float(ep[0]), "y": float(ep[1]), "spatialReference": {"wkid": 4326}}
+            if et == "adds":
+                end_attrs = {"parentglobalid": st.session_state.get("traffic_impact_globalid")}
+                if not end_attrs["parentglobalid"]:
+                    raise ValueError("Adds require st.session_state['traffic_impact_globalid'] for child layers.")
+                end_payload = {"adds": [{"attributes": end_attrs, "geometry": end_geo}]}
+            else:
+                if end_oid is None:
+                    raise ValueError("End-point update requires package['end_objectid'].")
+                end_attrs = {"objectId": end_oid}
+                end_payload = {"updates": [{"attributes": end_attrs, "geometry": end_geo}]}
+
+        def _clean_child(p):
+            return clean_payload(p, et) if "clean_payload" in globals() else p
+
+        out["route"] = _clean_child(route_payload)
+        out["start"] = _clean_child(start_payload)
+        out["end"]   = _clean_child(end_payload)
+
+    return out
 
 
+# -----------------------------------------------------------------------------
+# Build & deploy payloads to AGOL for add/update/delete (single point layer)
+# -----------------------------------------------------------------------------
+def manage_communities_payloads(package, edit_type = None):
+    """
+    Build a single-layer payload for Impacted Communities.
 
+    `package` shape (expected):
+    {
+        "objectid": Optional[int],  # present for existing
+        "attributes": { <field1>:..., <field2>:..., <field3>:... },
+        "point": {"lonlat":[x,y], "lng":x, "lat":y},
+    }
 
-def traffic_impact_start_point_payload():
-    try:
-        # Ensure geometry exists
-        if not st.session_state.get("project_impact_start_point"):
-            raise ValueError("No traffic impact start point geometry selected.")
-        
-        points = st.session_state["project_impact_start_point"]
-        
-        if not points:
-            raise ValueError("No valid start point geometry found.")
+    Returns
+    -------
+    {
+      "community": {
+         "adds"    : [ {...feature...} ],
+         "updates" : [ {...feature...} ],
+         "deletes" : [ OBJECTID, ... ]  # (we adapt later for the loader)
+      }
+    }
+    """
+    fields = st.session_state.get("impacted_communities_fields") or []
+    guid_field = st.session_state.get("impacted_communities_guid_field", "APEX_GUID")
+    apex_guid = st.session_state.get("apex_guid")
 
-        # Build payloads for each point
-        for lon, lat in points:
-            payload = {
-                "adds": [
-                    {
-                        "attributes": {
-                            "parentglobalid": st.session_state.get("traffic_impact_globalid"),
-                        },
-                        "geometry": {
-                            "x": float(lon),   # lon = x
-                            "y": float(lat),   # lat = y
-                            "spatialReference": {"wkid": 4326}
-                        }
-                    }
-                ]
-            }
-        return clean_payload(payload)
+    attrs = dict(package.get("attributes") or {})
+    # Ensure project GUID attribute is present on adds
+    if edit_type == "adds" and guid_field and apex_guid is not None:
+        attrs[guid_field] = apex_guid
 
-    except Exception as e:
-        raise RuntimeError(f"Error building Traffic Impact Start Point Payload: {e}")
+    # Geometry (keep exact x=lng, y=lat)
+    pt = package.get("point") or {}
+    x = pt.get("lng")
+    y = pt.get("lat")
+    geom = None
+    if (x is not None) and (y is not None):
+        geom = {"x": x, "y": y}
 
+    feature = {"attributes": attrs}
+    if geom is not None:
+        feature["geometry"] = geom
 
+    payload = {"community": {}}
 
+    if edit_type == "adds":
+        payload["community"]["adds"] = [feature]
+    elif edit_type == "updates":
+        # Require OBJECTID for updates
+        objectid = package.get("objectid") or attrs.get("OBJECTID") or attrs.get("objectId")
+        if objectid is not None and "OBJECTID" not in attrs:
+            # Normalize OBJECTID casing the same way your loader expects
+            attrs["OBJECTID"] = objectid
+        payload["community"]["updates"] = [feature]
+    elif edit_type == "deletes":
+        objectid = package.get("objectid") or attrs.get("OBJECTID") or attrs.get("objectId")
+        payload["community"]["deletes"] = [objectid] if objectid is not None else []
+    else:
+        raise ValueError(f"Unsupported edit_type: {edit_type}")
 
-def traffic_impact_end_point_payload():
-    try:
-        # Ensure geometry exists
-        if not st.session_state.get("project_impact_end_point"):
-            raise ValueError("No traffic impact end point geometry selected.")
-
-        
-        points = st.session_state["project_impact_end_point"]
-    
-
-        if not points:
-            raise ValueError("No valid end point geometry found.")
-
-        # Build payloads for each point
-        for lon, lat in points:
-            payload = {
-                "adds": [
-                    {
-                        "attributes": {
-                            "parentglobalid": st.session_state.get("traffic_impact_globalid"),
-                        },
-                        "geometry": {
-                            "x": float(lon),   # lon = x
-                            "y": float(lat),   # lat = y
-                            "spatialReference": {"wkid": 4326}
-                        }
-                    }
-                ]
-            }
-
-        return clean_payload(payload)
-
-    except Exception as e:
-        raise RuntimeError(f"Error building Traffic Impact End Point Payload: {e}")
-    
+    return payload
 
 
 
@@ -854,9 +1058,8 @@ def awp_apex_cy_payload():
         id_field="Id",
         id_value=st.session_state.get("awp_guid")
     )
-
     # Read session values
-    cy_awp = st.session_state.get("awp_selected_construction_years")
+    cy_awp  = st.session_state.get("awp_selected_construction_years")
     cy_year = st.session_state.get("construction_year")
 
     # --- Normalize existing AWP years into a list ---
@@ -871,7 +1074,7 @@ def awp_apex_cy_payload():
     if cy_year and cy_year not in cy_list:
         cy_list.append(cy_year)
 
-    # Back to comma‑separated string
+    # Back to comma–separated string
     cy_list_str = ", ".join(cy_list)
 
     # --- Build final payload ---
@@ -886,8 +1089,6 @@ def awp_apex_cy_payload():
                 }
             ]
         }
-
         return clean_payload(payload)
-
     except Exception as e:
         raise RuntimeError(f"Error building Construction Years payload: {e}")

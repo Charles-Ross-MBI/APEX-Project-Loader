@@ -73,10 +73,6 @@ from agol.agol_payloads import (
     geography_payload,
     geometry_payload,
     project_payload,
-    traffic_impact_payload,
-    traffic_impact_route_payload,
-    traffic_impact_start_point_payload,
-    traffic_impact_end_point_payload,
     location_payload
 )
 
@@ -193,33 +189,7 @@ def load_project_apex() -> None:
             st.error(f"• {msg}")
 
     # -------------------------------------------------------------------------
-    # STEP 3: UPLOAD COMMUNITIES (OPTIONAL)
-    # -------------------------------------------------------------------------
-    if st.session_state.get('impact_comm_ids') != None:
-        with spinner_container, st.spinner("Loading Communities to APEX..."):
-            try:
-                payload_communities = communities_payload()
-                communities_layer = st.session_state["impact_comms_layer"]
-                if payload_communities is None:
-                    load_communities = None
-                else:
-                    load_communities = AGOLDataLoader(
-                        url=st.session_state["apex_url"], layer=communities_layer
-                    ).add_features(payload_communities)
-            except Exception as e:
-                load_communities = {"success": False, "message": f"Communities payload error: {e}"}
-        spinner_container.empty()
-
-        if load_communities is not None:
-            if load_communities.get("success"):
-                st.success("LOAD COMMUNITIES: SUCCESS ✅")
-            else:
-                msg = load_communities.get("message", "Unknown communities upload error.")
-                st.error(f"LOAD COMMUNITIES: FAILURE ❌ {msg}")
-                _record_failure("Communities", msg)
-
-    # -------------------------------------------------------------------------
-    # STEP 4: UPLOAD GEOGRAPHY (OPTIONAL; GATED BY SESSION_STATE LIST PRESENCE)
+    # STEP 3: UPLOAD GEOGRAPHY (OPTIONAL; GATED BY SESSION_STATE LIST PRESENCE)
     # -------------------------------------------------------------------------
     with spinner_container, st.spinner("Loading Geography to APEX..."):
         geography_layers = {
@@ -271,137 +241,9 @@ def load_project_apex() -> None:
     else:
         st.success("LOAD GEOGRAPHIES: SUCCESS ✅")
 
-
-    # # -------------------------------------------------------------------------
-    # # STEP 5: LOAD TRAFFIC IMPACT CARD
-    # # -------------------------------------------------------------------------
-    # if st.session_state.get("traffic_impact_answer") == "Yes":
-    #     # Use the SAME spinner placeholder defined at the top so it updates in-place
-    #     with spinner_container, st.spinner("Loading Traffic Impact Events to APEX..."):
-    #         failures = []  # Track all failures in this step
-
-    #         # LOAD TRAFFIC IMPACT EVENT AND GET GLOBALID
-    #         try:
-    #             payload_traffic_impact = traffic_impact_payload()
-    #             traffic_impact_layer = st.session_state["traffic_impacts_layer"]
-
-    #             load_traffic_impact = (
-    #                 AGOLDataLoader(
-    #                     url=st.session_state["traffic_impact_url"],
-    #                     layer=traffic_impact_layer
-    #                 ).add_features(payload_traffic_impact)
-    #                 if payload_traffic_impact
-    #                 else {"success": False, "message": "Failed to Load Traffic Impact to APEX DB"}
-    #             )
-
-    #             if not load_traffic_impact.get("success"):
-    #                 msg = f"Traffic Impact Event: {load_traffic_impact.get('message', 'Unknown failure.')}"
-    #                 failures.append(msg)
-    #                 _record_failure("Traffic Impact Event", msg)
-    #             else:
-    #                 st.session_state["traffic_impact_globalid"] = format_guid(load_traffic_impact["globalids"])
-
-    #         except Exception as e:
-    #             msg = f"Traffic Impact payload error: {e}"
-    #             failures.append(msg)
-    #             _record_failure("Traffic Impact Event", msg)
-
-    #         # Only continue if GlobalID exists
-    #         if st.session_state.get("traffic_impact_globalid"):
-
-    #             # -------------------------------------------------------------
-    #             # ADD ROUTE
-    #             # -------------------------------------------------------------
-    #             try:
-    #                 payload_route_traffic_impact = traffic_impact_route_payload()
-    #                 traffic_impact_route_layer = st.session_state["traffic_impact_routes_layer"]
-
-    #                 route_result = (
-    #                     AGOLDataLoader(
-    #                         url=st.session_state["traffic_impact_url"],
-    #                         layer=traffic_impact_route_layer
-    #                     ).add_features(payload_route_traffic_impact)
-    #                     if payload_route_traffic_impact
-    #                     else {"success": False, "message": "Failed to Load Traffic Impact Route to APEX DB"}
-    #                 )
-
-    #                 if not route_result.get("success"):
-    #                     msg = f"Traffic Impact Route: {route_result.get('message', 'Unknown failure.')}"
-    #                     failures.append(msg)
-    #                     _record_failure("Traffic Impact Route", msg)
-
-    #             except Exception as e:
-    #                 msg = f"Traffic Impact Route payload error: {e}"
-    #                 failures.append(msg)
-    #                 _record_failure("Traffic Impact Route", msg)
-
-    #             # -------------------------------------------------------------
-    #             # ADD START POINT
-    #             # -------------------------------------------------------------
-    #             try:
-    #                 payload_start_point_traffic_impact = traffic_impact_start_point_payload()
-    #                 traffic_impact_start_point_layer = st.session_state["traffic_impact_start_points_layer"]
-
-    #                 start_result = (
-    #                     AGOLDataLoader(
-    #                         url=st.session_state["traffic_impact_url"],
-    #                         layer=traffic_impact_start_point_layer
-    #                     ).add_features(payload_start_point_traffic_impact)
-    #                     if payload_start_point_traffic_impact
-    #                     else {"success": False, "message": "Failed to Load Traffic Impact Start Point to APEX DB"}
-    #                 )
-
-    #                 if not start_result.get("success"):
-    #                     msg = f"Traffic Impact Start Point: {start_result.get('message', 'Unknown failure.')}"
-    #                     failures.append(msg)
-    #                     _record_failure("Traffic Impact Start Point", msg)
-
-    #             except Exception as e:
-    #                 msg = f"Traffic Impact Start Point payload error: {e}"
-    #                 failures.append(msg)
-    #                 _record_failure("Traffic Impact Start Point", msg)
-
-    #             # -------------------------------------------------------------
-    #             # ADD END POINT
-    #             # -------------------------------------------------------------
-    #             try:
-    #                 payload_end_point_traffic_impact = traffic_impact_end_point_payload()
-    #                 traffic_impact_end_point_layer = st.session_state["traffic_impact_end_points_layer"]
-
-    #                 end_result = (
-    #                     AGOLDataLoader(
-    #                         url=st.session_state["traffic_impact_url"],
-    #                         layer=traffic_impact_end_point_layer
-    #                     ).add_features(payload_end_point_traffic_impact)
-    #                     if payload_end_point_traffic_impact
-    #                     else {"success": False, "message": "Failed to Load Traffic Impact End Point to APEX DB"}
-    #                 )
-
-    #                 if not end_result.get("success"):
-    #                     msg = f"Traffic Impact End Point: {end_result.get('message', 'Unknown failure.')}"
-    #                     failures.append(msg)
-    #                     _record_failure("Traffic Impact End Point", msg)
-
-    #             except Exception as e:
-    #                 msg = f"Traffic Impact End Point payload error: {e}"
-    #                 failures.append(msg)
-    #                 _record_failure("Traffic Impact End Point", msg)
-
-    #     # Render results OUTSIDE the spinner/container so clearing doesn't remove them
-    #     if not failures:
-    #         st.success("LOAD TRAFFIC IMPACT EVENTS: SUCCESS ✅")
-    #     else:
-    #         st.error("LOAD TRAFFIC IMPACT EVENTS: FAILURE ❌")
-    #         for msg in failures:
-    #             st.error(f"• {msg}")
-
-    #     # Clear ONLY the spinner placeholder now; messages remain visible
-    #     spinner_container.empty()
-
-
             
     # # -------------------------------------------------------------------------
-    # # STEP 6 (SILENT): IMPACT AREA APEX UPDATE
+    # # STEP 4 (SILENT): IMPACT AREA APEX UPDATE
     # # -------------------------------------------------------------------------
     try:
         payload_location = location_payload()

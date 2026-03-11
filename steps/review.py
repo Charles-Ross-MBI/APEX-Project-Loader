@@ -248,24 +248,13 @@ def review_information():
         
 
     
-     # Geography
+    # Geography
     with st.expander("Geography", expanded=True):
         col1, col2 = st.columns(2)
         col1.markdown(f"**House Districts:** {st.session_state.get('house_string','')}")
         col2.markdown(f"**Senate Districts:** {st.session_state.get('senate_string','')}")
         col1.markdown(f"**Borough/Census Area:** {st.session_state.get('borough_string','')}")
         col2.markdown(f"**DOT&PF Region:** {st.session_state.get('region_string','')}")
-
     
-    # Impacted Communities
-    if st.session_state.get("impact_comm_names", ""):
-        with st.expander("Impacted Communities", expanded=True):
-            impact_comm = st.session_state.get("impact_comm_names", "")
-            if isinstance(impact_comm, list):
-                impact_comm_display = ", ".join(str(item) for item in impact_comm) if impact_comm else ""
-            else:
-                impact_comm_display = impact_comm
-            st.markdown(f"**Communities:** {impact_comm_display}")
-
     
     st.write("")

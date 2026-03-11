@@ -80,12 +80,14 @@ def init_session_state():
     # Defaults
     defaults = {
         'version': None,
+        'guid': None,
         'set_year': None,
         "loader_step": 1,
         "manager_step": 1,
         "is_awp": False,
         "apex_guid": None,
-        "awp_guid": None,
+        "apex_awp_id": None,
+        "apex_object_id": None,
         "ti_guid": None
     }
 
@@ -206,8 +208,8 @@ def init_session_state():
         'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/APEX_PROJECTS_LOADER_APPLICATION/FeatureServer",
         'traffic_impact_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/TRAFFIC_IMPACT_EVENTS_LOADER_APPLICATION/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_Contracts/FeatureServer",
-        "milepoints": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
-        'communities': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
+        "milepoints_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
+        'communities_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
     }
 
     aashtoware_layers = {

@@ -59,6 +59,9 @@ Notes:
 import tempfile
 import zipfile
 import math
+import hashlib
+import json
+from typing import Optional  # (ensure present at top of file)
 
 import streamlit as st
 from streamlit_folium import st_folium
@@ -87,11 +90,16 @@ from util.map_util import (
 
 # Data helpers (milepoint entry)
 from agol.agol_util import (
+    get_multiple_fields,
+    select_record,
     get_unique_field_values, 
     query_routes_within_buffer)
 
 # Data Helpers Create Buffer
 from util.geospatial_util import create_buffers
+
+# Streamlit Handlers
+from util.streamlit_util import impacted_comms_select
 
 
 
@@ -1269,52 +1277,59 @@ def aashtoware_path(awp: dict, container) -> None:
 
 
 
-def select_route_and_points(container, key_prefix: str = ""):
-    """
-    One-step UI:
-      - Segmented control at top: 1. Select Route (default), 2. Set Start, 3. Set End
-      - Start/End disabled until a route is selected (soft-lock: enforced before widget render)
-      - When Select Route is active → map clicks select a route
-      - When Start/End active → map clicks snap endpoints
-      - Draw order: Impact Area → Routes → Project Geometry → Markers
-      - Always fit map to the impact area on each render
-    """
+# If you want explicit imports, uncomment these lines (match your project paths):
+# from util.geometry_util import geometry_to_folium, ro_widget, fmt_string, set_bounds_boundary
+# from util.geospatial_util import query_routes_within_buffer
 
-    import math
-    import json  # for fingerprinting project geometry
-    import hashlib  # for fingerprinting project geometry
-    import streamlit as st
-    import folium
-    from streamlit_folium import st_folium
+def select_route_and_points(container, key_prefix: str = "", is_existing: bool = False, package=None):
+    """
+    One-step UI (pure selector):
+    - Segmented control at top: 1. Select Route (default), 2. Set Start, 3. Set End
+    - Start/End disabled until a route is selected (soft-lock before widget render)
+    - When Select Route is active → map clicks select a route
+    - When Start/End active → map clicks snap endpoints
+    - Draw order: Impact Area → Routes → Project Geometry → Markers
 
-    st.markdown("<h5>CREATE TRAFFIC IMPACT EVENT</h5>", unsafe_allow_html=True)
-    st.caption(
-        "Choose the route affected by the APEX project and specify the start and end points "
-        "for the impact. Once all values are set, select **Load** to add the traffic impact "
-        "to the list."
-    )
+    VIEWPORT POLICY (fit_bounds every render):
+    - The map always calls `fit_bounds(bounds)` to the current project/area on render.
+    - Segmented-control changes do not change which area we fit to; they only change click behavior.
+    """
+    
+
+    # --- Headings (contextual) ---
+    if not is_existing:
+        st.markdown("###### CREATE TRAFFIC IMPACT EVENT", unsafe_allow_html=True)
+        st.caption(
+            "Choose the route affected by the APEX project and specify the start and end points "
+            "for the impact. Once all values are set, you can Load it from the page controls."
+        )
+    else:
+        st.markdown("###### MANAGE TRAFFIC IMPACT", unsafe_allow_html=True)
+        st.caption(
+            "Review and modify the selected traffic impact. After adjusting the route, start, and end "
+            "points, use the page controls to Update or Delete."
+        )
 
     # ---------------------------
     # Helpers
     # ---------------------------
     def _get_last_click():
-        """Safe getter for the last click from the folium component."""
         try:
             return (st.session_state.get(map_key) or {}).get("last_clicked")
         except Exception:
             return None
 
     def _ensure_ti_dict():
-        ti_key = f"{key_prefix}traffic_impact"
-        if ti_key not in st.session_state or not isinstance(st.session_state[ti_key], dict):
-            st.session_state[ti_key] = {
+        ti_key_local = f"{key_prefix}traffic_impact"
+        if ti_key_local not in st.session_state or not isinstance(st.session_state[ti_key_local], dict):
+            st.session_state[ti_key_local] = {
                 "route_id": None,
                 "route_name": None,
                 "route_geom": None,
                 "start_point": None,
                 "end_point": None,
             }
-        return ti_key
+        return ti_key_local
 
     def _line_distance_meters(click_lonlat, line_lonlat):
         try:
@@ -1346,11 +1361,12 @@ def select_route_and_points(container, key_prefix: str = ""):
 
     def _haversine(lon1, lat1, lon2, lat2):
         R = 6371000.0
-        phi1, phi2 = math.radians(lat1), math.radians(lat2)
-        dphi = math.radians(lat2 - lat1)
-        dlmb = math.radians(lon2 - lon1)
-        a = math.sin(dphi / 2) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlmb / 2) ** 2
-        return 2 * R * math.asin(math.sqrt(a))
+        import math as _m
+        phi1, phi2 = _m.radians(lat1), _m.radians(lat2)
+        dphi = _m.radians(lat2 - lat1)
+        dlmb = _m.radians(lon2 - lon1)
+        a = _m.sin(dphi / 2) ** 2 + _m.cos(phi1) * _m.cos(phi2) * _m.sin(dlmb / 2) ** 2
+        return 2 * R * _m.asin(_m.sqrt(a))
 
     def _precompute_metrics(line_lonlat):
         lengths = []
@@ -1380,13 +1396,7 @@ def select_route_and_points(container, key_prefix: str = ""):
                 chain = metrics["cum"][i] + metrics["lengths"][i] * t
                 best = (dist, px, py, i, chain)
         _, px, py, seg, chain = best
-        return {
-            "lat": py,
-            "lng": px,
-            "lonlat": [px, py],
-            "seg_idx": seg,
-            "chainage_m": chain,
-        }
+        return {"lat": py, "lng": px, "lonlat": [px, py], "seg_idx": seg, "chainage_m": chain}
 
     def _fingerprint(obj) -> str:
         try:
@@ -1399,96 +1409,152 @@ def select_route_and_points(container, key_prefix: str = ""):
     # ---------------------------
     # Session keys
     # ---------------------------
-    fit_req_key = f"{key_prefix}fit_bounds_request"   # (kept for compatibility; not used)
-    fit_geom_key = f"{key_prefix}fit_bounds_geom"
-
     cand_key = f"{key_prefix}impact_route_candidates"
+    cand_sig_key = f"{key_prefix}impact_route_candidates_sig"  # cache guard
     map_key = f"{key_prefix}route_map"
-
-    # IMPORTANT: bump widget key version to bust Streamlit's cached widget state
-    seg_key_legacy = f"{key_prefix}place_mode"          # old key (unnumbered labels lived here)
-    seg_key = f"{key_prefix}place_mode_v2"              # new key (numbered labels only)
-
+    seg_key_legacy = f"{key_prefix}place_mode"
+    seg_key = f"{key_prefix}place_mode_v2"
     sel_id_key = f"{key_prefix}selected_route_id"
     sel_name_key = f"{key_prefix}selected_route_name"
     sel_geom_key = f"{key_prefix}selected_route_geom"
     tol_key = f"{key_prefix}route_click_out_of_tolerance"
-
-    # change-detection signatures
-    proj_geom_sig_key = f"{key_prefix}__proj_geom_sig"
-    proj_type_sig_key = f"{key_prefix}__proj_geom_type_sig"
     reset_notice_key = f"{key_prefix}__route_reset_notice"
-
-    # force mode reset flag (used by CLEAR handler)
-    force_select_route_flag = f"{key_prefix}__force_select_route"
-
     ti_key = _ensure_ti_dict()
 
-    # Impact buffers (per-tab override or global)
-    buffers = st.session_state.get(fit_geom_key) or st.session_state.get("impact_area") or []
+    # ----------------------------------------------------------------
+    # --- OID persistence: normalize & cache IDs for existing items ---
+    # ----------------------------------------------------------------
+    oid_parent_key = f"{key_prefix}ti_parent_oid"
+    oid_route_key  = f"{key_prefix}ti_route_oid"
+    oid_start_key  = f"{key_prefix}ti_start_oid"
+    oid_end_key    = f"{key_prefix}ti_end_oid"
 
-    # Project geometry/type for change detection
-    project_geom = (
-        st.session_state.get("project_geometry") or st.session_state.get("project_geom")
-    )
-    project_geom_type = (
-        st.session_state.get("project_geometry_type")
-        or st.session_state.get("project_geom_type")
-        or ""
-    ).lower()
+    def _norm_parent_oid(src: dict):
+        if not isinstance(src, dict): return None
+        return src.get("objectid") or src.get("OBJECTID") or src.get("objectId") or src.get("ti_objectid")
 
-    # ---------------------------
-    # Reset route/points if project geometry or type changed
-    # (safe: this occurs BEFORE the widget is rendered)
-    # ---------------------------
-    curr_geom_sig = _fingerprint(project_geom)
-    curr_type_sig = _fingerprint(project_geom_type)
+    def _norm_child_oids(src: dict):
+        if not isinstance(src, dict): return (None, None, None)
+        return (
+            src.get("route_objectid") or src.get("routeObjectId") or src.get("route_OBJECTID"),
+            src.get("start_objectid") or src.get("startObjectId") or src.get("start_OBJECTID"),
+            src.get("end_objectid")   or src.get("endObjectId")   or src.get("end_OBJECTID"),
+        )
 
-    prev_geom_sig = st.session_state.get(proj_geom_sig_key)
-    prev_type_sig = st.session_state.get(proj_type_sig_key)
+    if is_existing and isinstance(package, dict):
+        # Capture once (do not overwrite non-None values).
+        p_oid = _norm_parent_oid(package)
+        r_oid, s_oid, e_oid = _norm_child_oids(package)
+        if p_oid is not None and st.session_state.get(oid_parent_key) is None:
+            st.session_state[oid_parent_key] = p_oid
+        if r_oid is not None and st.session_state.get(oid_route_key) is None:
+            st.session_state[oid_route_key] = r_oid
+        if s_oid is not None and st.session_state.get(oid_start_key) is None:
+            st.session_state[oid_start_key] = s_oid
+        if e_oid is not None and st.session_state.get(oid_end_key) is None:
+            st.session_state[oid_end_key] = e_oid
 
-    if prev_geom_sig is None and prev_type_sig is None:
-        st.session_state[proj_geom_sig_key] = curr_geom_sig
-        st.session_state[proj_type_sig_key] = curr_type_sig
+        # Rehydrate IDs into the working package if missing on re-entry.
+        if "objectid" not in package and st.session_state.get(oid_parent_key) is not None:
+            package["objectid"] = st.session_state[oid_parent_key]
+        if "route_objectid" not in package and st.session_state.get(oid_route_key) is not None:
+            package["route_objectid"] = st.session_state[oid_route_key]
+        if "start_objectid" not in package and st.session_state.get(oid_start_key) is not None:
+            package["start_objectid"] = st.session_state[oid_start_key]
+        if "end_objectid" not in package and st.session_state.get(oid_end_key) is not None:
+            package["end_objectid"] = st.session_state[oid_end_key]
+
+    # ------------------------------------------------------
+    # Decide which area polygon to display (visual only)
+    # ------------------------------------------------------
+    package_area = (package or {}).get("area") if isinstance(package, dict) else None
+    buffered_area = st.session_state.get("impact_area")  # from Manage
+    fit_geom_key = f"{key_prefix}fit_bounds_geom"
+    parent_fit_geom = st.session_state.get(fit_geom_key)
+
+    if is_existing and package_area:
+        area_for_display = package_area
     else:
-        if curr_geom_sig != prev_geom_sig or curr_type_sig != prev_type_sig:
-            st.session_state.pop(sel_id_key, None)
-            st.session_state.pop(sel_name_key, None)
-            st.session_state.pop(sel_geom_key, None)
-            st.session_state.pop(f"{key_prefix}selected_start_point", None)
-            st.session_state.pop(f"{key_prefix}selected_end_point", None)
-
-            st.session_state[ti_key].update(
-                {
-                    "route_id": None,
-                    "route_name": None,
-                    "route_geom": None,
-                    "start_point": None,
-                    "end_point": None,
-                }
-            )
-
-            st.session_state.pop(tol_key, None)
-            try:
-                st.session_state.setdefault(map_key, {})
-                st.session_state[map_key]["last_clicked"] = None
-            except Exception:
-                pass
-
-            st.session_state[proj_geom_sig_key] = curr_geom_sig
-            st.session_state[proj_type_sig_key] = curr_type_sig
-            st.session_state[reset_notice_key] = True
+        area_for_display = parent_fit_geom or buffered_area or []
 
     # ---------------------------
-    # Candidate routes
+    # Project geometry change-detection (run BEFORE seeding)
     # ---------------------------
+    proj_geom_sig_key = f"{key_prefix}__proj_geom_sig"
+    project_changed = False
+    project_geom = st.session_state.get("apex_proj_area")
+    curr_proj_sig = _fingerprint(project_geom)
+    prev_proj_sig = st.session_state.get(proj_geom_sig_key)
+    if prev_proj_sig is None:
+        st.session_state[proj_geom_sig_key] = curr_proj_sig
+    elif curr_proj_sig != prev_proj_sig:
+        # Clear previous selection — we'll reseed from `package` below
+        st.session_state.pop(sel_id_key, None)
+        st.session_state.pop(sel_name_key, None)
+        st.session_state.pop(sel_geom_key, None)
+        st.session_state.pop(f"{key_prefix}selected_start_point", None)
+        st.session_state.pop(f"{key_prefix}selected_end_point", None)
+        st.session_state[ti_key].update(
+            {"route_id": None, "route_name": None, "route_geom": None, "start_point": None, "end_point": None}
+        )
+        st.session_state.pop(tol_key, None)
+        try:
+            st.session_state.setdefault(map_key, {})
+            st.session_state[map_key]["last_clicked"] = None
+        except Exception:
+            pass
+        st.session_state[proj_geom_sig_key] = curr_proj_sig
+        st.session_state[reset_notice_key] = True
+        project_changed = True
+
+    # ------------------------------------------
+    # Seed from package (AFTER change-detection)
+    # ------------------------------------------
+    if isinstance(package, dict):
+        ti_dict = st.session_state.get(ti_key, {})
+        needs_seed = project_changed or not any(
+            [
+                ti_dict.get("route_id"),
+                ti_dict.get("route_geom"),
+                ti_dict.get("start_point"),
+                ti_dict.get("end_point"),
+            ]
+        )
+        if needs_seed:
+            for k in ("route_id", "route_name", "route_geom", "start_point", "end_point"):
+                if package.get(k) is not None:
+                    ti_dict[k] = package.get(k)
+            if package.get("route_id") is not None:
+                st.session_state[sel_id_key] = package.get("route_id")
+            if package.get("route_name") is not None:
+                st.session_state[sel_name_key] = package.get("route_name")
+            if package.get("route_geom") is not None:
+                st.session_state[sel_geom_key] = package.get("route_geom")
+            if package.get("start_point") is not None:
+                st.session_state[f"{key_prefix}selected_start_point"] = package.get("start_point")
+            if package.get("end_point") is not None:
+                st.session_state[f"{key_prefix}selected_end_point"] = package.get("end_point")
+
+    # ---------------------------
+    # Candidate routes (cached per area signature)
+    # ---------------------------
+    results = []
+
+    def _fingerprint_area(geom):
+        return _fingerprint(geom)
+
+    buffers_sig = _fingerprint_area(area_for_display)
     try:
-        results = query_routes_within_buffer(
-            buffers,
-            fields=("Route_ID", "Route_Name"),
-            include_geometry=True,
-        ) or []
-        st.session_state[cand_key] = results
+        if st.session_state.get(cand_sig_key) != buffers_sig:
+            results = query_routes_within_buffer(
+                area_for_display,
+                fields=("Route_ID", "Route_Name"),
+                include_geometry=True,
+            ) or []
+            st.session_state[cand_key] = results
+            st.session_state[cand_sig_key] = buffers_sig
+        else:
+            results = st.session_state.get(cand_key, []) or []
     except Exception:
         results = st.session_state.get(cand_key, []) or []
 
@@ -1505,29 +1571,21 @@ def select_route_and_points(container, key_prefix: str = ""):
     selected_geom = st.session_state.get(sel_geom_key)
 
     # =======================================================
-    # Segmented Control (TOP) — numbered options only
+    # Segmented Control (numbered; stable)
     # =======================================================
-    # One-time cleanup: drop the legacy widget value if it exists
     if seg_key_legacy in st.session_state:
         st.session_state.pop(seg_key_legacy, None)
 
     OPTIONS = ["1. Select Route", "2. Set Start", "3. Set End"]
-
-    # Determine if start/end allowed
     disabled_start_end = selected_id is None
-
-    # Default if missing/invalid
     curr = st.session_state.get(seg_key)
     if curr not in OPTIONS:
         st.session_state[seg_key] = "1. Select Route"
         curr = "1. Select Route"
-
-    # Soft-lock if no route chosen yet
     if disabled_start_end and curr in ("2. Set Start", "3. Set End"):
         st.session_state[seg_key] = "1. Select Route"
         curr = "1. Select Route"
 
-    # Render segmented control (key changed to v2 to bust cache)
     place_mode = st.segmented_control(
         "Complete Steps",
         options=OPTIONS,
@@ -1552,12 +1610,10 @@ def select_route_and_points(container, key_prefix: str = ""):
     # Map click for ROUTE SELECTION
     # ---------------------------
     last_click = _get_last_click()
-
     if last_click and place_mode == "1. Select Route" and id_to_geom:
         try:
             click_lon, click_lat = float(last_click["lng"]), float(last_click["lat"])
             nearest_id, nearest_dist = None, float("inf")
-
             for rid, geom in id_to_geom.items():
                 d = _line_distance_meters((click_lon, click_lat), geom)
                 if d < nearest_dist:
@@ -1565,15 +1621,16 @@ def select_route_and_points(container, key_prefix: str = ""):
 
             if nearest_id and nearest_dist <= 100:
                 prev_id = st.session_state.get(sel_id_key)
-
-                # If changing to a different route, clear start/end points
                 if prev_id != nearest_id:
+                    # Route changed → clear points (IDs preserved)
                     st.session_state.pop(f"{key_prefix}selected_start_point", None)
                     st.session_state.pop(f"{key_prefix}selected_end_point", None)
                     st.session_state[ti_key]["start_point"] = None
                     st.session_state[ti_key]["end_point"] = None
+                    if isinstance(package, dict):
+                        package["start_point"] = None
+                        package["end_point"] = None
 
-                # Update the selected route
                 st.session_state[sel_id_key] = nearest_id
                 st.session_state[sel_name_key] = id_to_name.get(nearest_id)
                 st.session_state[sel_geom_key] = id_to_geom.get(nearest_id)
@@ -1584,8 +1641,26 @@ def select_route_and_points(container, key_prefix: str = ""):
                         "route_geom": st.session_state[sel_geom_key],
                     }
                 )
+                if isinstance(package, dict):
+                    package["route_id"] = st.session_state[ti_key]["route_id"]
+                    package["route_name"] = st.session_state[ti_key]["route_name"]
+                    package["route_geom"] = st.session_state[ti_key]["route_geom"]
 
-                # Clear last click and refresh
+                    # --- NAME from route_name (existing only) ---
+                    if is_existing and package.get("route_name"):
+                        package["name"] = f"Traffic Impact @ {package['route_name']}"
+
+                    # Re-attach IDs after route change if needed
+                    if "objectid" not in package and st.session_state.get(oid_parent_key) is not None:
+                        package["objectid"] = st.session_state[oid_parent_key]
+                    if "route_objectid" not in package and st.session_state.get(oid_route_key) is not None:
+                        package["route_objectid"] = st.session_state[oid_route_key]
+                    if "start_objectid" not in package and st.session_state.get(oid_start_key) is not None:
+                        package["start_objectid"] = st.session_state[oid_start_key]
+                    if "end_objectid" not in package and st.session_state.get(oid_end_key) is not None:
+                        package["end_objectid"] = st.session_state[oid_end_key]
+
+                # Reset click
                 try:
                     st.session_state.setdefault(map_key, {})
                     st.session_state[map_key]["last_clicked"] = None
@@ -1605,7 +1680,6 @@ def select_route_and_points(container, key_prefix: str = ""):
     # Map click for ENDPOINT SNAPPING
     # ---------------------------
     last_click = _get_last_click()
-
     if last_click and selected_geom and place_mode in ("2. Set Start", "3. Set End"):
         try:
             metrics = _precompute_metrics(selected_geom)
@@ -1613,9 +1687,13 @@ def select_route_and_points(container, key_prefix: str = ""):
             if place_mode == "2. Set Start":
                 st.session_state[ti_key]["start_point"] = snapped
                 st.session_state[f"{key_prefix}selected_start_point"] = snapped
+                if isinstance(package, dict):
+                    package["start_point"] = snapped
             elif place_mode == "3. Set End":
                 st.session_state[ti_key]["end_point"] = snapped
                 st.session_state[f"{key_prefix}selected_end_point"] = snapped
+                if isinstance(package, dict):
+                    package["end_point"] = snapped
         finally:
             try:
                 st.session_state.setdefault(map_key, {})
@@ -1624,26 +1702,13 @@ def select_route_and_points(container, key_prefix: str = ""):
                 pass
 
     # ------------------------------------------------------
-    # ALWAYS-FIT: compute bounds against the impact area
+    # Build map (always fit to area)
     # ------------------------------------------------------
-    # Use per-tab fit geometry if provided; otherwise fall back to global impact_area.
-    target_geom_for_fit = st.session_state.get(fit_geom_key) or (st.session_state.get("impact_area") or [])
-    fit_bounds_value = None
-    if target_geom_for_fit:
-        try:
-            # Use your existing helper; pass geometry as-is (no normalization).
-            fit_bounds_value = set_bounds_boundary(target_geom_for_fit)
-        except Exception:
-            fit_bounds_value = None
-
-    # ---------------------------
-    # Build map
-    # ---------------------------
-    m = folium.Map(location=[63.5, -149], zoom_start=5, control_scale=True)
+    m = folium.Map(control_scale=True)
 
     # Impact Area
-    if buffers:
-        for ring_lonlat in buffers:
+    if area_for_display:
+        for ring_lonlat in area_for_display:
             geometry_to_folium(
                 ring_lonlat,
                 color="#e64a19",
@@ -1654,203 +1719,466 @@ def select_route_and_points(container, key_prefix: str = ""):
                 feature_type="polygon",
             ).add_to(m)
 
-    # ---------------------------
-    # Routes (with hover highlight in Select Route mode)
-    # ---------------------------
+    # Routes (when selecting) OR the selected route (other modes)
     if place_mode == "1. Select Route":
-        # Use GeoJson so we can attach a highlight_function for hover.
-        # We intentionally do this only in discovery mode; in placement mode we show only the selected route (below).
         for r in results:
             attrs = r.get("attributes") or {}
             rid = attrs.get("Route_ID")
             geom = r.get("geometry") or []
             if not rid or not geom:
                 continue
-
-            # Build a GeoJSON LineString feature (coords are [lon,lat] as you already store)
             feature = {
                 "type": "Feature",
                 "geometry": {"type": "LineString", "coordinates": geom},
-                "properties": {
-                    "Route_ID": rid,
-                    "Route_Name": attrs.get("Route_Name"),
-                },
+                "properties": {"Route_ID": rid, "Route_Name": attrs.get("Route_Name")},
             }
-
-            # Freeze per-route base style (avoid late-binding issues in lambdas)
             base_color = "#e53935" if rid == selected_id else "#6c757d"
             base_weight = 6 if rid == selected_id else 3
             base_opacity = 1.0 if rid == selected_id else 0.75
 
             def _style_factory(color, weight, opacity):
-                return lambda f: {"color": color, "weight": weight, "opacity": opacity}
+                return {"color": color, "weight": weight, "opacity": opacity}
 
-            # Highlight: on hover, always show red + weight 6
             highlight = lambda f: {"color": "#e53935", "weight": 6, "opacity": 1.0}
-
             folium.GeoJson(
                 data=feature,
-                style_function=_style_factory(base_color, base_weight, base_opacity),
+                style_function=lambda f, c=base_color, w=base_weight, o=base_opacity: _style_factory(c, w, o),
                 highlight_function=highlight,
-                tooltip=folium.Tooltip(f"Route ID: {rid}<br>Route Name: {attrs.get('Route_Name')}"),
-                # Keep it in the default pane so z-order matches your other layers
+                tooltip=folium.Tooltip(f"Route ID: {rid}\nRoute Name: {attrs.get('Route_Name')}"),
                 name=f"route_{rid}",
             ).add_to(m)
     else:
-        # Placement mode (Set Start / Set End): draw only the selected route
         if selected_id and selected_geom:
             geometry_to_folium(
                 selected_geom,
                 color="#e53935",
                 weight=6,
                 opacity=1.0,
-                tooltip=f"Route ID: {fmt_string(selected_id)}<br>Route Name: {fmt_string(st.session_state.get(sel_name_key, '') or id_to_name.get(selected_id, ''))}",
+                tooltip=(
+                    f"Route ID: {fmt_string(selected_id)}\n"
+                    f"Route Name: {fmt_string(st.session_state.get(sel_name_key, '') or id_to_name.get(selected_id, ''))}"
+                ),
                 feature_type="line",
             ).add_to(m)
-        else:
-            # No selected route yet; hide candidates per requirement
-            pass
 
-    # Project Geometry
-    project_geom = st.session_state.get("project_geometry")
+    # Project Geometry (visual reference)
+    project_geom_display = st.session_state.get("project_geometry")
     project_geom_type = (st.session_state.get("project_geometry_type") or "").lower()
-    if project_geom and project_geom_type:
+    if project_geom_display and project_geom_type:
         if project_geom_type in ("point",):
-            geometry_to_folium(
-                project_geom,
-                feature_type="point",
-                icon=folium.Icon(color="blue"),
-            ).add_to(m)
+            geometry_to_folium(project_geom_display, feature_type="point", icon=folium.Icon(color="blue")).add_to(m)
         elif project_geom_type in ("line", "linestring"):
-            geometry_to_folium(project_geom, feature_type="line", weight=4).add_to(m)
+            geometry_to_folium(project_geom_display, feature_type="line", weight=4).add_to(m)
         elif project_geom_type in ("polygon",):
-            geometry_to_folium(
-                project_geom,
-                feature_type="polygon",
-                weight=4,
-                fill=True,
-            ).add_to(m)
+            geometry_to_folium(project_geom_display, feature_type="polygon", weight=4, fill=True).add_to(m)
         else:
-            geometry_to_folium(project_geom, feature_type="line", weight=4).add_to(m)
+            geometry_to_folium(project_geom_display, feature_type="line", weight=4).add_to(m)
 
-    # Markers
-    ti = st.session_state.get(ti_key, {})
-    if ti.get("start_point") and isinstance(ti["start_point"].get("lonlat"), list):
+    # Markers: Start/End points (always on top)
+    start_pt = (
+        st.session_state.get(f"{key_prefix}selected_start_point")
+        or st.session_state.get(ti_key, {}).get("start_point")
+    )
+    end_pt = (
+        st.session_state.get(f"{key_prefix}selected_end_point")
+        or st.session_state.get(ti_key, {}).get("end_point")
+    )
+    if isinstance(start_pt, dict) and start_pt.get("lonlat"):
         geometry_to_folium(
-            [ti["start_point"]["lonlat"]],
-            icon=folium.Icon(color="green"),
-            tooltip="Start",
+            [start_pt["lonlat"]],
             feature_type="point",
+            icon=folium.Icon(color="green", icon="play", prefix="fa"),
+            tooltip="Start"
         ).add_to(m)
-    if ti.get("end_point") and isinstance(ti["end_point"].get("lonlat"), list):
+    if isinstance(end_pt, dict) and end_pt.get("lonlat"):
         geometry_to_folium(
-            [ti["end_point"]["lonlat"]],
-            icon=folium.Icon(color="red"),
-            tooltip="End",
+            [end_pt["lonlat"]],
             feature_type="point",
+            icon=folium.Icon(color="red", icon="stop", prefix="fa"),
+            tooltip="End"
         ).add_to(m)
 
-    # --- ALWAYS APPLY FIT (after all layers are added) ---
-    if fit_bounds_value:
-        m.fit_bounds(fit_bounds_value)
+    # ---- FIT-BOUNDS (ALWAYS) ----
+    def _compute_bounds(geom):
+        if not geom:
+            return None
+        try:
+            # Flatten rings/parts into a single list of [lon, lat]
+            def _iter_coords(g):
+                if isinstance(g, dict):
+                    g = g.get("coordinates") or g.get("lonlat") or []
+                if isinstance(g, (list, tuple)):
+                    for item in g:
+                        if (
+                            isinstance(item, (list, tuple))
+                            and len(item) == 2
+                            and all(isinstance(v, (int, float)) for v in item)
+                        ):
+                            yield item
+                        else:
+                            for sub in _iter_coords(item):
+                                yield sub
 
-    # Render
-    st_folium(
+            xs, ys = [], []
+            for lon, lat in _iter_coords(geom):
+                xs.append(lon)
+                ys.append(lat)
+            if not xs or not ys:
+                return None
+            west, east = min(xs), max(xs)
+            south, north = min(ys), max(ys)
+            return [[south, west], [north, east]]
+        except Exception:
+            return None
+
+    preferred_fit_geom = (
+        st.session_state.get("apex_proj_area")  # canonical project area, preferred
+        or st.session_state.get(fit_geom_key)
+        or area_for_display
+    )
+    bounds = _compute_bounds(preferred_fit_geom)
+    if bounds:
+        m.fit_bounds(bounds)
+
+    # Render (only last_clicked is returned; dragging the map won't trigger reruns)
+    _ = st_folium(
         m,
         use_container_width=True,
         height=520,
         key=map_key,
-        returned_objects=["last_clicked"],
+        returned_objects=["last_clicked"],  # only clicks; no bounds/zoom subscription
     )
 
+    # Clear tolerance message & geometry-change notice if set
     if st.session_state.get(tol_key):
         st.info("Click closer to a route (within ~100m).")
         st.session_state.pop(tol_key, None)
 
-    if st.session_state.pop(reset_notice_key, False):
-        st.info("Project geometry changed — route selection and points were cleared.")
-
     # -----------------------------------------------------
-    # Action buttons under the map: LOAD / CLEAR
+    # Return the package (ensure IDs are preserved; name from route_name)
     # -----------------------------------------------------
-    st.session_state.setdefault("traffic_impacts_list", [])
+    ti_final = st.session_state.get(ti_key, {}) or {}
 
-    def _build_ti_package():
-        ti_local = st.session_state.get(ti_key, {}) or {}
-        package = {
-            "route_id": ti_local.get("route_id"),
-            "route_name": ti_local.get("route_name"),
-            "route_geom": ti_local.get("route_geom"),
-            "start_point": ti_local.get("start_point"),
-            "end_point": ti_local.get("end_point"),
-            # Optional context (kept as-is; no normalization)
-            "impact_area": st.session_state.get("impact_area"),
-            "project_geometry": st.session_state.get("project_geometry"),
-            "project_geometry_type": (st.session_state.get("project_geometry_type") or "").lower(),
-            "key_prefix": key_prefix,
-        }
+    if isinstance(package, dict):
+        # Update only the managed fields
+        for k in ("route_id", "route_name", "route_geom", "start_point", "end_point"):
+            if ti_final.get(k) is not None:
+                package[k] = ti_final.get(k)
+
+        # Area: buffered for new; keep passed-in area for existing
+        if not is_existing:
+            if "area" not in package or package.get("area") is None:
+                package["area"] = buffered_area or area_for_display
+        else:
+            if package_area is not None:
+                package["area"] = package_area
+
+        # Ensure IDs present for existing (fallback to cache)
+        if is_existing:
+            parent_oid = _norm_parent_oid(package) or st.session_state.get(oid_parent_key)
+            route_oid, start_oid, end_oid = _norm_child_oids(package)
+            route_oid = route_oid or st.session_state.get(oid_route_key)
+            start_oid = start_oid or st.session_state.get(oid_start_key)
+            end_oid   = end_oid   or st.session_state.get(oid_end_key)
+
+            if parent_oid is not None:
+                package["objectid"] = parent_oid
+                for alt in ("OBJECTID", "objectId", "ti_objectid"):
+                    package.pop(alt, None)
+            if route_oid is not None:
+                package["route_objectid"] = route_oid
+                for alt in ("routeObjectId", "route_OBJECTID"):
+                    package.pop(alt, None)
+            if start_oid is not None:
+                package["start_objectid"] = start_oid
+                for alt in ("startObjectId", "start_OBJECTID"):
+                    package.pop(alt, None)
+            if end_oid is not None:
+                package["end_objectid"] = end_oid
+                for alt in ("endObjectId", "end_OBJECTID"):
+                    package.pop(alt, None)
+
+            # --- NAME from route_name (existing only) ---
+            rn = package.get("route_name")
+            if isinstance(rn, str) and rn.strip():
+                package["name"] = f"Traffic Impact @ {rn.strip()}"
+
+        # Require route + both points before returning a package
+        has_route = bool(ti_final.get("route_id") and ti_final.get("route_geom"))
+        has_both_pts = bool(ti_final.get("start_point") and ti_final.get("end_point"))
+        if not (has_route and has_both_pts):
+            return None
+
+        # Drop disallowed keys
+        for drop_key in ("key_prefix", "project_geometry", "project_geometry_type"):
+            if drop_key in package:
+                package.pop(drop_key, None)
+
         return package
 
-    def _clear_current_selection():
-        # Clear the TI dict values
-        st.session_state[ti_key].update(
-            {
-                "route_id": None,
-                "route_name": None,
-                "route_geom": None,
-                "start_point": None,
-                "end_point": None,
-            }
-        )
-        # Clear mirrored keys
-        st.session_state.pop(sel_id_key, None)
-        st.session_state.pop(sel_name_key, None)
-        st.session_state.pop(sel_geom_key, None)
-        st.session_state.pop(f"{key_prefix}selected_start_point", None)
-        st.session_state.pop(f"{key_prefix}selected_end_point", None)
-        # Clear flags and last click (do NOT touch seg_key here)
-        st.session_state.pop(tol_key, None)
+    # If no incoming dict was provided, produce a minimal output (no ID inference for new)
+    out_pkg = {
+        "route_id": ti_final.get("route_id"),
+        "route_name": ti_final.get("route_name"),
+        "route_geom": ti_final.get("route_geom"),
+        "start_point": ti_final.get("start_point"),
+        "end_point": ti_final.get("end_point"),
+        "area": (buffered_area or area_for_display) if not is_existing else package_area,
+    }
+    return out_pkg
+
+
+
+
+
+import streamlit as st
+import folium
+from streamlit_folium import st_folium
+
+# assuming these helpers exist in your environment
+# from your_module import get_multiple_fields, select_record, geometry_to_folium
+
+def select_community(container, key_prefix: str = "", is_existing: bool = False, package=None):
+    """
+    Behavior:
+    - If is_existing == False → render the Impacted community dropdown FIRST in this function.
+    - If is_existing == True  → do NOT render the dropdown at all.
+    - Starts with no selection (placeholder) and persists across reruns.
+    - Map + fields update whenever the selection changes.
+
+    New requirement:
+    - Do NOT return a package until at least one of the following is provided:
+      * a point
+      * a Community Name
+      * Contact Name, Email, or Phone
+    """
+    COMMUNITY_ZOOM = 15
+    ALASKA_CENTER = [64.5, -152.0]
+    ALASKA_ZOOM = 3
+    PLACEHOLDER = "— Select a community —"
+
+    # ---------- data prep (no Streamlit UI calls here) ----------
+    pkg = dict(package or {})
+    fields = dict(pkg.get("fields") or pkg.get("attributes") or {})
+    pkg["fields"] = fields
+    pkg["attributes"] = fields
+    point = dict(pkg.get("point") or {})
+    pkg["point"] = point
+
+    version = st.session_state.get("form_version", 0)
+
+    comms_url = (
+        st.session_state.get("communities_url")
+        or st.session_state.get("dcced_communities_url")
+        or None
+    )
+    lyr_idx = int(
+        st.session_state.get("communities_layer")
+        or st.session_state.get("dcced_communities_layer")
+        or 7
+    )
+    id_field = (
+        st.session_state.get("communities_id_field")
+        or st.session_state.get("dcced_communities_id_field")
+        or "DCCED_CommunityId"
+    )
+
+    # Build options (no Streamlit UI here)
+    options = []
+    load_err = None
+    if isinstance(comms_url, str) and comms_url:
         try:
-            st.session_state.setdefault(map_key, {})
-            st.session_state[map_key]["last_clicked"] = None
-        except Exception:
-            pass
-        st.session_state["map_reset_counter"] = st.session_state.get("map_reset_counter", 0) + 1
+            rows = get_multiple_fields(comms_url, lyr_idx, ["OverallName", id_field]) or []
+            for c in rows:
+                name = c.get("OverallName")
+                cid = c.get(id_field) or c.get("DCCED_CommunityId") or c.get("DCCED_CommunityID")
+                if name and cid is not None:
+                    options.append((name, cid))
+        except Exception as e:
+            load_err = f"Communities list not loaded: {e}"
 
-    # Buttons container
-    button_container = st.container()
-    with button_container:
-        col1, col2 = st.columns([1, 1])
+    if not options:
+        fallback = (
+            st.session_state.get("dcced_communities_list")
+            or st.session_state.get("communities_list")
+            or []
+        )
+        for c in fallback:
+            name = c.get("OverallName")
+            cid = c.get(id_field) or c.get("DCCED_CommunityId") or c.get("DCCED_CommunityID")
+            if name and cid is not None:
+                options.append((name, cid))
 
-        with col1:
-            if st.button("LOAD", use_container_width=True, type="primary", key=f"{key_prefix}btn_load"):
-                package = _build_ti_package()
-                # Guard: require a route AND both points before saving
-                has_route = bool(package.get("route_id") and package.get("route_geom"))
-                has_both_points = bool(package.get("start_point") and package.get("end_point"))
-                if has_route and has_both_points:
-                    st.session_state["traffic_impacts_list"].append(package)
+    names = [n for (n, _cid) in options]
+    name_to_id = dict(options)
+
+    # ==================== LAYOUT: single root container with ordered sub-containers ====================
+    root = container if container is not None else st.container()
+    with root:
+        top = st.container()   # <-- Dropdown always rendered here, first (when not existing)
+        body = st.container()  # <-- Contact info + Map always rendered here, second
+
+        # ---------- TOP: DROPDOWN (only when not existing) ----------
+        selected_name = None
+        selected_id = None
+        geom = None
+
+        if not is_existing:
+            with top:
+                if not names:
+                    # Disabled dropdown FIRST — no early return so the body still renders
+                    st.selectbox(
+                        "Impacted community",
+                        options=["— no communities available —"],
+                        key=f"{key_prefix}_comms_list",
+                        disabled=True,
+                    )
+                    if load_err:
+                        st.caption(load_err)
                 else:
-                    st.warning("Select a route and set both Start and End points before loading.")
+                    # Reset to placeholder if the options list itself changes
+                    # (fingerprint kept for future use if you need to detect list changes)
+                    opt_fingerprint = f"{len(names)}::{hash(tuple(names[:10]))}"
+                    select_key = f"{key_prefix}_comms_list"
+                    opts = [PLACEHOLDER] + sorted(names)
 
-        with col2:
-            if st.button("CLEAR", use_container_width=True, key=f"{key_prefix}btn_clear"):
-                # If the in-progress selection was previously loaded, remove it from the list.
-                # We do this BEFORE clearing local selection so we can compare fields.
-                candidate = _build_ti_package()
-                impacts = st.session_state.get("traffic_impacts_list", [])
-                if impacts:
-                    st.session_state["traffic_impacts_list"] = [
-                        p for p in impacts
-                        if not (
-                            p.get("route_id") == candidate.get("route_id")
-                            and p.get("start_point") == candidate.get("start_point")
-                            and p.get("end_point") == candidate.get("end_point")
-                        )
-                    ]
+                    # RENDERED FIRST in this function
+                    selected_display = st.selectbox(
+                        "Impacted community",
+                        options=opts,
+                        index=0,  # no preselection
+                        key=select_key,
+                        help="Choose the community impacted by the project.",
+                    )
+                    selected_name = None if selected_display == PLACEHOLDER else selected_display
+                    selected_id = name_to_id.get(selected_name) if selected_name else None
 
-                _clear_current_selection()
-                # Force mode back to "1. Select Route" on the next run,
-                # applied BEFORE the widget is instantiated.
-                st.session_state[force_select_route_flag] = True
-                st.rerun()
+                # Geometry fetch (below the dropdown but still in TOP area)
+                if isinstance(comms_url, str) and comms_url and (selected_id is not None):
+                    try:
+                        features = select_record(
+                            url=comms_url,
+                            layer=lyr_idx,
+                            id_field=id_field,
+                            id_value=str(selected_id),
+                            fields=f"OverallName,{id_field}",
+                            return_geometry=True,
+                        ) or []
+                        if features:
+                            feat = features[0] if isinstance(features, list) else {}
+                            geom = (feat.get("geometry") or {}) if isinstance(feat, dict) else None
+                    except Exception as e:
+                        st.caption(f"Failed to retrieve geometry: {e}")
+                        geom = None
+
+                # Persist selection into package/session
+                pkg["selected_community_name"] = (selected_name or "").strip() if selected_name else ""
+                if isinstance(geom, dict) and (selected_name is not None):
+                    lon = geom.get("x")
+                    lat = geom.get("y")
+                    if isinstance(lon, (float, int)) and isinstance(lat, (float, int)):
+                        pkg["point"] = {
+                            "lonlat": [float(lon), float(lat)],
+                            "lng": float(lon),
+                            "lat": float(lat),
+                        }
+
+                # Keep Community_Name stable
+                if (fields.get("Community_Name") in (None, "")) and pkg.get("selected_community_name"):
+                    fields["Community_Name"] = pkg.get("selected_community_name")
+
+                # Keep selected id in session
+                if selected_id is not None:
+                    st.session_state["impact_comm_id"] = selected_id
+
+                # Show any earlier load error BELOW the dropdown (but still in TOP)
+                if load_err and names:
+                    st.caption(load_err)
+
+        # ---------- BODY: CONTACT + MAP (always below the dropdown if it exists) ----------
+        with body:
+            contact_val = st.text_input(
+                "Contact Name",
+                value=str(fields.get("Community_Contact") or "") if fields.get("Community_Contact") is not None else "",
+                key=f"{key_prefix}Community_Contact",
+            )
+            fields["Community_Contact"] = contact_val
+
+            col_phone, col_email = st.columns(2)
+            with col_phone:
+                phone_val = st.text_input(
+                    "Phone",
+                    value=str(fields.get("Community_Contact_Phone") or "") if fields.get("Community_Contact_Phone") is not None else "",
+                    key=f"{key_prefix}Community_Contact_Phone",
+                )
+                fields["Community_Contact_Phone"] = phone_val
+            with col_email:
+                email_val = st.text_input(
+                    "Email",
+                    value=str(fields.get("Community_Contact_Email") or "") if fields.get("Community_Contact_Email") is not None else "",
+                    key=f"{key_prefix}Community_Contact_Email",
+                )
+                fields["Community_Contact_Email"] = email_val
+
+            # Keep Community_Name stable if we have a current selection
+            if (fields.get("Community_Name") in (None, "")) and (pkg.get("selected_community_name") not in (None, "")):
+                fields["Community_Name"] = pkg.get("selected_community_name")
+
+            # ------------------------------ MAP ------------------------------
+            lat = (pkg.get("point") or {}).get("lat")
+            lng = (pkg.get("point") or {}).get("lng")
+
+            if isinstance(lat, (float, int)) and isinstance(lng, (float, int)):
+                start_location = [float(lat), float(lng)]
+                start_zoom = COMMUNITY_ZOOM
+            else:
+                start_location = ALASKA_CENTER
+                start_zoom = ALASKA_ZOOM
+
+            m = folium.Map(location=start_location, zoom_start=start_zoom, control_scale=True, height=500)
+
+            if isinstance(lat, (float, int)) and isinstance(lng, (float, int)):
+                try:
+                    icon = folium.Icon(color="pink", icon="home", prefix="fa", icon_color="white")
+                    layer = geometry_to_folium({"x": float(lng), "y": float(lat)}, icon=icon)
+                    layer.add_to(m)
+                except Exception:
+                    pass
+
+            result = st_folium(
+                m,
+                use_container_width=True,
+                key=f"{key_prefix}folium",
+                returned_objects=["last_clicked"],
+                height=500,
+            )
+
+            last_clicked = (result or {}).get("last_clicked") or {}
+            if isinstance(last_clicked, dict) and "lat" in last_clicked and "lng" in last_clicked:
+                y = last_clicked.get("lat")
+                x = last_clicked.get("lng")
+                if isinstance(x, (float, int)) and isinstance(y, (float, int)):
+                    pkg["point"] = {"lonlat": [float(x), float(y)], "lng": float(x), "lat": float(y)}
+
+        # ------------------------------ FINALIZE + VALIDATION GATE ------------------------------
+        # Mirror fields onto attributes for compatibility with downstream code
+        pkg["fields"] = fields
+        pkg["attributes"] = fields
+
+        # Validation: do not return a package until one of the required items exists
+        point = pkg.get("point") or {}
+        has_point = isinstance(point, dict) and isinstance(point.get("lat"), (float, int)) and isinstance(point.get("lng"), (float, int))
+
+        name = (fields.get("Community_Name") or "").strip()
+        contact = (fields.get("Community_Contact") or "").strip()
+        phone = (fields.get("Community_Contact_Phone") or "").strip()
+        email = (fields.get("Community_Contact_Email") or "").strip()
+
+        has_comm = bool(name)
+        has_contact = bool(contact or phone or email)
+
+        if has_point or has_comm or has_contact:
+            return pkg
+
+        # Nothing sufficient yet → do not return a package
+        return None

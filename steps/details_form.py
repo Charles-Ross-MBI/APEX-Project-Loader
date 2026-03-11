@@ -625,14 +625,6 @@ def _render_original_form(is_awp: bool):
         st.write("")
 
         # ---------------------------------------------------------------------
-        # SECTION 9
-        # ---------------------------------------------------------------------
-        st.markdown("<h5>9. IMPACTED COMMUNITIES</h5>", unsafe_allow_html=True)
-        st.session_state["impact_comm"] = impacted_comms_select(is_awp=is_awp)
-
-        st.write("")
-
-        # ---------------------------------------------------------------------
         # SUBMIT
         # ---------------------------------------------------------------------
 
