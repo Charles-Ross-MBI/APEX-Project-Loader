@@ -979,10 +979,10 @@ def aashtoware_point(points: dict, container):
     - Always render midpoints using geometry_to_folium(feature_type='point')
     - Always store midpoints as [[lon, lat]] in session_state when there is exactly ONE.
     """
-
     target = container if container is not None else st
+
     with target:
-        st.markdown("<h5>AASHTOWARE COORDINATES</h5>", unsafe_allow_html=True)
+        st.markdown("###### AASHTOWARE COORDINATES\n", unsafe_allow_html=True)
         st.caption(
             "The coordinates below reflect the project's midpoint(s) from AASHTOWare. "
             "If they are correct, continue. Otherwise update AASHTOWare or select another upload option."
@@ -1032,17 +1032,22 @@ def aashtoware_point(points: dict, container):
         # MAP (geometry_to_folium ONLY)
         # ---------------------------------------------------------
         if midpoints_lonlat:
-            first_latlon = [midpoints_lonlat[0][1], midpoints_lonlat[0][0]]
+            first_latlon = [float(midpoints_lonlat[0][1]), float(midpoints_lonlat[0][0])]
         else:
             first_latlon = [0.0, 0.0]
 
         m = folium.Map(location=first_latlon, zoom_start=12)
 
+        # -- helper: cast to float right before passing to folium point renderer --
+        def _as_float_lonlat(pair):
+            # pair is [lon, lat] and may contain strings; preserve order
+            return [float(pair[0]), float(pair[1])]
+
         for coords in midpoints_lonlat:
             geometry_to_folium(
-                geom=[coords],                   # EXACT [lon, lat]
+                geom=[_as_float_lonlat(coords)],  # EXACT [lon, lat] cast to float
                 feature_type="point",
-                icon=folium.Icon(color="blue")
+                icon=folium.Icon(color="blue"),
             ).add_to(m)
 
         if midpoints_lonlat:
@@ -1059,38 +1064,37 @@ def aashtoware_point(points: dict, container):
             st.session_state["selected_point"] = None
 
 
-
-
 def aashtoware_path(awp: dict, container) -> None:
     """
     Place AASHTOWare BOP/EOP (and optional Midpoint) markers on a draw-enabled map.
 
     Input package (trusted as-is, no normalization):
-      awp = {
-        'BOP':      {'lat': <float>, 'lon': <float>} | [{'lat': <float>, 'lon': <float>}, ...],
-        'EOP':      {'lat': <float>, 'lon': <float>} | [{'lat': <float>, 'lon': <float>}, ...],
-        'Midpoint': {'lat': <float>, 'lon': <float>} | [{'lat': <float>, 'lon': <float>}, ...]  # optional
-      }
+    awp = {
+      'BOP': {'lat': , 'lon': } \ or [{'lat': , 'lon': }, ...],
+      'EOP': {'lat': , 'lon': } \ or [{'lat': , 'lon': }, ...],
+      'Midpoint': {'lat': , 'lon': } \ or [{'lat': , 'lon': }, ...]  # optional
+    }
 
     Behavior:
-      - Renders ALL BOP (green), EOP (red), and Midpoint (blue) points via geometry_to_folium(feature_type='point').
-      - Stores canonical lists in session_state (always [lon, lat]).
-      - Draw-enabled map (polyline only); LOAD/CLEAR logic preserved.
+    - Renders ALL BOP (green), EOP (red), and Midpoint (blue) points via geometry_to_folium(feature_type='point').
+    - Stores canonical lists in session_state (always [lon, lat]).
+    - Draw-enabled map (polyline only); LOAD/CLEAR logic preserved.
 
     On LOAD:
       st.session_state["selected_route"] = [
-          [[lon, lat], [lon, lat], ...],   # polyline 1
-          ...
+        [[lon, lat], [lon, lat], ...],  # polyline 1
+        ...
       ]
-      And persists:
-        - st.session_state["awp_bops_lonlat"] = [[lon, lat], ...]
-        - st.session_state["awp_eops_lonlat"] = [[lon, lat], ...]
-        - st.session_state["awp_midpoints_lonlat"] = [[lon, lat], ...]  # if present
-        - st.session_state["awp_bop_eop_pairs"] = [{"bop":[lon,lat], "eop":[lon,lat]}, ...]
 
-      Back-compat (exactly one bop and one eop):
-        - st.session_state['project_bop'] = [lon, lat]
-        - st.session_state['project_eop'] = [lon, lat]
+    And persists:
+      - st.session_state["awp_bops_lonlat"] = [[lon, lat], ...]
+      - st.session_state["awp_eops_lonlat"] = [[lon, lat], ...]
+      - st.session_state["awp_midpoints_lonlat"] = [[lon, lat], ...]  # if present
+      - st.session_state["awp_bop_eop_pairs"] = [{"bop":[lon,lat], "eop":[lon,lat]}, ...]
+
+    Back-compat (exactly one bop and one eop):
+      - st.session_state['project_bop'] = [lon, lat]
+      - st.session_state['project_eop'] = [lon, lat]
 
     On CLEAR:
       st.session_state["selected_route"] = None
@@ -1098,18 +1102,18 @@ def aashtoware_path(awp: dict, container) -> None:
       st.rerun()
     """
     target = container if container is not None else st
+
     with target:
-        st.markdown("<h5>AASHTOWARE COORDINATES</h5>", unsafe_allow_html=True)
+        st.markdown("###### AASHTOWARE COORDINATES\n", unsafe_allow_html=True)
         st.caption(
             "These coordinates reflect the project's begin (BOP), end (EOP), "
             "and optional midpoint from AASHTOWare. Draw the project route on the map below, then click LOAD."
         )
         st.info(
-        "UNDER DEVELOPMENT — Routes sourced from AASHTOWare are still being built out. "
-        "You can currently view the BOP, Midpoint, and EOP for a project and manually draw a route between those points. "
-        "Automated route retrieval from AASHTOWare is not yet active."
+            "UNDER DEVELOPMENT — Routes sourced from AASHTOWare are still being built out. "
+            "You can currently view the BOP, Midpoint, and EOP for a project and manually draw a route between those points. "
+            "Automated route retrieval from AASHTOWare is not yet active."
         )
-
 
         # -----------------------------
         # Extract BOP/EOP/Midpoint as-is
@@ -1121,9 +1125,9 @@ def aashtoware_path(awp: dict, container) -> None:
                 return [obj]
             return []
 
-        bops_in  = _as_list(awp.get('BOP'))
-        eops_in  = _as_list(awp.get('EOP'))
-        mids_in  = _as_list(awp.get('Midpoint'))
+        bops_in = _as_list(awp.get('BOP'))
+        eops_in = _as_list(awp.get('EOP'))
+        mids_in = _as_list(awp.get('Midpoint'))
 
         # Canonical [lon, lat] (NO conversion/rounding; trust package)
         bops_lonlat = [[b['lon'], b['lat']] for b in bops_in if isinstance(b, dict) and 'lon' in b and 'lat' in b]
@@ -1139,7 +1143,6 @@ def aashtoware_path(awp: dict, container) -> None:
         if single_pair:
             bop_lon, bop_lat = bops_lonlat[0]
             eop_lon, eop_lat = eops_lonlat[0]
-
             cols = st.columns(2)
             with cols[0]:
                 ro_widget(key="awp_bop_lat", label="BOP Latitude", value=bop_lat)
@@ -1172,36 +1175,41 @@ def aashtoware_path(awp: dict, container) -> None:
         # ---- Map with markers (geometry_to_folium ONLY) ----
         # Center = first available point → [lat, lon]
         if bops_lonlat:
-            start_center = [bops_lonlat[0][1], bops_lonlat[0][0]]
+            start_center = [float(bops_lonlat[0][1]), float(bops_lonlat[0][0])]
         elif eops_lonlat:
-            start_center = [eops_lonlat[0][1], eops_lonlat[0][0]]
+            start_center = [float(eops_lonlat[0][1]), float(eops_lonlat[0][0])]
         elif mids_lonlat:
-            start_center = [mids_lonlat[0][1], mids_lonlat[0][0]]
+            start_center = [float(mids_lonlat[0][1]), float(mids_lonlat[0][0])]
         else:
             start_center = [0.0, 0.0]
 
         m = folium.Map(location=start_center, zoom_start=10)
 
+        # -- helper: cast to float right before passing to folium point renderer --
+        def _as_float_lonlat(pair):
+            # pair is [lon, lat] and may contain strings; preserve order
+            return [float(pair[0]), float(pair[1])]
+
         # Add ALL points via geometry_to_folium
         for coords in bops_lonlat:
             geometry_to_folium(
-                geom=[coords],                  # canonical [lon, lat]
+                geom=[_as_float_lonlat(coords)],  # [lon, lat] as float
                 feature_type='point',
-                icon=folium.Icon(color="green")
+                icon=folium.Icon(color="green"),
             ).add_to(m)
 
         for coords in eops_lonlat:
             geometry_to_folium(
-                geom=[coords],
+                geom=[_as_float_lonlat(coords)],
                 feature_type='point',
-                icon=folium.Icon(color="red")
+                icon=folium.Icon(color="red"),
             ).add_to(m)
 
         for coords in mids_lonlat:
             geometry_to_folium(
-                geom=[coords],
+                geom=[_as_float_lonlat(coords)],
                 feature_type='point',
-                icon=folium.Icon(color="blue")
+                icon=folium.Icon(color="blue"),
             ).add_to(m)
 
         # Fit bounds using canonical [lon, lat] lists
@@ -1229,7 +1237,7 @@ def aashtoware_path(awp: dict, container) -> None:
             m,
             use_container_width=True,
             height=520,
-            returned_objects=["all_drawings"]
+            returned_objects=["all_drawings"],
         )
 
         # Extract all drawn lines (GeoJSON uses [lon, lat]); round only for drawn data
@@ -1238,13 +1246,11 @@ def aashtoware_path(awp: dict, container) -> None:
             for f in output["all_drawings"]:
                 geom = f.get("geometry", {}) if isinstance(f, dict) else {}
                 gtype = geom.get("type")
-
                 if gtype == "LineString":
                     coords = geom.get("coordinates", []) or []
                     line_lonlat = [[round(lon, 6), round(lat, 6)] for lon, lat in coords]
                     if line_lonlat:
                         latest_routes.append(line_lonlat)
-
                 elif gtype == "MultiLineString":
                     for line in geom.get("coordinates", []) or []:
                         line_lonlat = [[round(lon, 6), round(lat, 6)] for lon, lat in line]
@@ -1268,11 +1274,9 @@ def aashtoware_path(awp: dict, container) -> None:
         # ---- Buttons ----
         with st.container():
             col1, col2 = st.columns([1, 1])
-
             with col1:
                 if st.button("LOAD", use_container_width=True, type="primary"):
                     st.session_state["selected_route"] = latest_routes if latest_routes else None
-
             with col2:
                 if st.button("CLEAR", use_container_width=True):
                     st.session_state["selected_route"] = None
