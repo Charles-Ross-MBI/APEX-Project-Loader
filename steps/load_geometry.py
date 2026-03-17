@@ -225,63 +225,36 @@ def load_geometry_app():
 
         if project_type.startswith("Site"):
             if option == "AASHTOWare":
-                if not submitted_now:
-                    aashtoware_point(
-                        points,
-                        container=geo_container,
-                    )
-                else:
-                    st.markdown("###### AASHTOWARE COORDINATES", unsafe_allow_html=True)
-                    st.caption("Footprint submitted — input locked. Clear to re-run AASHTOWare.")
-                # (no need to touch selected_route here)
+                aashtoware_point(
+                    points,
+                    container=geo_container,
+                )
             elif option == "Upload Shapefile":
-                if not submitted_now:
-                    point_shapefile(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — file input locked. Clear to upload a different file.")
+                point_shapefile(container=geo_container)
             elif option == "Select Point on Map":
-                if not submitted_now:
-                    draw_point(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — map input locked. Clear to edit points.")
+                draw_point(container=geo_container)
             elif option == "Enter Latitude/Longitude":
-                if not submitted_now:
-                    enter_latlng(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — manual entry locked. Clear to edit coordinates.")
+                enter_latlng(container=geo_container)
 
         elif project_type.startswith("Route"):
             if option == "AASHTOWare":
-                if not submitted_now:
-                    aashtoware_path(
-                        points,
-                        container=geo_container,
-                    )
-                else:
-                    st.markdown("###### AASHTOWARE COORDINATES", unsafe_allow_html=True)
-                    st.caption("Footprint submitted — input locked. Clear to re-run AASHTOWare.")
+                aashtoware_path(
+                    points,
+                    container=geo_container,
+                )
             elif option == "Upload Shapefile":
-                if not submitted_now:
-                    polyline_shapefile(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — file input locked. Clear to upload a different file.")
+                polyline_shapefile(container=geo_container)
+
             elif option == "Draw Route on Map":
-                if not submitted_now:
-                    draw_line(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — map input locked. Clear to edit route.")
+                draw_line(container=geo_container)
+
 
         elif project_type.startswith("Boundary"):
             if option == "Upload Shapefile":
-                if not submitted_now:
-                    polygon_shapefile(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — file input locked. Clear to upload a different file.")
+                polygon_shapefile(container=geo_container)
+
             elif option == "Draw Boundary on Map":
-                if not submitted_now:
                     draw_boundary(container=geo_container)
-                else:
-                    st.caption("Footprint submitted — map input locked. Clear to edit boundary.")
 
         # ---------------------------------------------------------------------
         # Read canonical geometry keys & check for presence
