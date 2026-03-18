@@ -494,17 +494,34 @@ def manage_traffic_impacts():
         sel_id_key = f"{key_prefix}selected_route_id"
         sel_name_key= f"{key_prefix}selected_route_name"
         sel_geom_key= f"{key_prefix}selected_route_geom"
+        seg_key = f"{key_prefix}place_mode_v2"
+        fit_geom_key = f"{key_prefix}fit_bounds_geom"
+        map_key = f"{key_prefix}route_map"
+
+        # 1) Clear the working TI dict (route + points)
         st.session_state.setdefault(ti_key, {})
         st.session_state[ti_key].update(
             {"route_id": None, "route_name": None, "route_geom": None, "start_point": None, "end_point": None}
         )
+
+        # 2) Drop selector caches that re-seed the UI
         st.session_state.pop(sel_id_key, None)
         st.session_state.pop(sel_name_key, None)
         st.session_state.pop(sel_geom_key, None)
         st.session_state.pop(f"{key_prefix}selected_start_point", None)
         st.session_state.pop(f"{key_prefix}selected_end_point", None)
+
+        # 3) Reset segmented control back to the first step
+        st.session_state.pop(seg_key, None)
+
+        # 4) Remove any sticky fit-bounds geom so viewport recalculates from project/area
+        st.session_state.pop(fit_geom_key, None)
+
+        # 5) One-shot flag so the selector knows to SKIP seeding from any passed-in package
+        st.session_state[f"{key_prefix}__ti_just_cleared"] = True
+
+        # 6) Map interaction reset
         try:
-            map_key = f"{key_prefix}route_map"
             st.session_state.setdefault(map_key, {})
             st.session_state[map_key]["last_clicked"] = None
         except Exception:

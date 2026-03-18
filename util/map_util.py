@@ -38,8 +38,8 @@ import streamlit as st
 from streamlit_folium import st_folium
 import folium
 from folium.plugins import Search, Draw, Geocoder
+from branca.element import Element
 import math
-
 
 # =============================================================================
 # UI ENHANCEMENTS (FOLIUM CONTROLS / OVERLAYS)
@@ -76,11 +76,6 @@ def add_small_geocoder(fmap, position: str = "topright", width_px: int = 120, fo
     """))
 
 
-
-# Make sure these are present somewhere in your module:
-import folium
-from branca.element import Element
-
 def geometry_to_folium(
     geom,
     *,
@@ -96,45 +91,58 @@ def geometry_to_folium(
     tooltip = None,
     popup = None,
     # Marker styling
-    icon = None,   # e.g., folium.Icon(color="blue"), applies to folium.Marker only
+    icon = None,                   # legacy behavior: folium.Marker if icon is provided
+    # Point styling (no typing)
+    point_shape = None,            # "marker" (default), "circle", "square"
+    point_radius = 5,
+    point_color = "#2e2e2e",
+    point_weight = 1,
+    point_fill_color = None,
+    point_fill_opacity = 0.9,
+    point_renderer = None,         # callable(lat, lon) -> folium.Layer (optional)
     # Explicit feature hint to disambiguate list-of-points
-    feature_type = None,  # "point" | "multipoint" | "line" | "linestring" | "polyline" | "polygon" | None(auto)
-    hightlight = False,   # kept for backward compatibility; not used
-    suppress_focus_outline: bool = True,  # NEW: remove black focus box on selection
+    feature_type = None,           # "point" | "multipoint" | "line" | "polyline" | "polygon" | None(auto)
+    hightlight = False,            # kept for backward compatibility; not used
+    suppress_focus_outline = True, # remove black focus box on selection
 ):
     """
     Convert ArcGIS-style or raw coordinate-array geometry into Folium layers.
 
     Supported inputs:
-      - Point:      {"x": lon, "y": lat}
+      - Point: {"x": lon, "y": lat}
       - Multipoint: {"points": [[lon, lat], ...]}
-      - Polyline:   {"paths":  [ [[lon, lat], ...], ... ]}
-      - Polygon:    {"rings":  [ [[lon, lat], ...], ... ]} (outer + holes)
+      - Polyline: {"paths": [ [[lon, lat], ...], ... ]}
+      - Polygon: {"rings": [ [[lon, lat], ...], ... ]} (outer + holes)
       - List forms (no keys):
-          * Single path:    [[lon, lat], ...]                     -> Polyline
-          * Multi-path:     [ [[lon,lat],...], [[lon,lat],...] ]  -> Multiple polylines
-          * Single ring:    [[lon, lat], ... (closed)]            -> Polygon
-          * Multi-ring:     [ [[lon,lat],...], [[lon,lat],...] ]  -> Polygon (outer + holes)
+          * Single path: [[lon, lat], ...] -> Polyline
+          * Multi-path: [ [[lon,lat],...], [[lon,lat],...] ] -> Multiple polylines
+          * Single ring: [[lon, lat], ... (closed)] -> Polygon
+          * Multi-ring: [ [[lon,lat],...], [[lon,lat],...] ] -> Polygon (outer + holes)
       - Collections: [ geom1, geom2, ... ] -> FeatureGroup
 
     Notes:
       - Assumes [lon, lat] in WGS84. Converts to [lat, lon] for Folium where required.
       - Polygons with holes are emitted as GeoJSON (Folium.Polygon can't represent holes).
       - Pass `feature_type` to explicitly interpret ambiguous lists (e.g., points-as-line).
-      - Set `suppress_focus_outline=True` to remove the black focus box on selection/toggle.
+      - Point styling:
+          * `point_shape="square"` -> tiny square (RegularPolygonMarker).
+          * `point_shape="circle"` -> CircleMarker.
+          * Default/None -> folium.Marker using `icon` if provided.
+      - If `point_renderer` is provided, it is called for every point (lat, lon)
+        and its returned layer is used directly.
     """
 
     # ---------------- CSS Suppressor ----------------
     _FOCUS_CSS = """
     <style>
-      /* Remove black focus outline for Leaflet layers and controls */
-      .leaflet-container .leaflet-interactive:focus,
-      .leaflet-container .leaflet-control a:focus,
-      .leaflet-container .leaflet-control-layers label:focus,
-      .leaflet-container .leaflet-control-layers-toggle:focus {
+    /* Remove black focus outline for Leaflet layers and controls */
+    .leaflet-container .leaflet-interactive:focus,
+    .leaflet-container .leaflet-control a:focus,
+    .leaflet-container .leaflet-control-layers label:focus,
+    .leaflet-container .leaflet-control-layers-toggle:focus {
         outline: none !important;
         box-shadow: none !important;
-      }
+    }
     </style>
     """
 
@@ -162,23 +170,17 @@ def geometry_to_folium(
         return ring if len(ring) > 0 and ring[0] == ring[-1] else ring + [ring[0]]
 
     def polygon_geojson_from_rings(rings):
-        """
-        Build a GeoJSON Polygon (outer + holes).
-        Coordinates remain [lon, lat] as per GeoJSON spec.
-        """
+        """Build a GeoJSON Polygon (outer + holes). Coordinates remain [lon, lat]."""
         if not rings:
             raise ValueError("Polygon requires at least one ring")
         rings_closed = [ensure_closed(r) for r in rings]
         return {
             "type": "Feature",
-            "geometry": {
-                "type": "Polygon",
-                "coordinates": rings_closed
-            },
-            "properties": {}
+            "geometry": {"type": "Polygon", "coordinates": rings_closed},
+            "properties": {},
         }
 
-    # Style application helpers
+    # ---- Style application helpers ----
     def _apply_common_bindings(layer):
         if tooltip is not None:
             try:
@@ -192,13 +194,8 @@ def geometry_to_folium(
                 pass
         return _maybe_suppress_focus(layer)
 
-    def _marker(lat, lon):
-        mk = folium.Marker([lat, lon], icon=icon if icon is not None else None)
-        return _apply_common_bindings(mk)
-
     def _polyline(**kw):
-        # Note: keep interactive=True so tooltips/popups still work.
-        layer = folium.PolyLine(**kw)
+        layer = folium.PolyLine(**kw)  # keep interactive=True so tooltips/popups work
         return _apply_common_bindings(layer)
 
     def _polygon_simple(latlon, **_):
@@ -210,27 +207,75 @@ def geometry_to_folium(
             dash_array=dash_array,
             fill=fill,
             fill_color=(fill_color or color),
-            fill_opacity=fill_opacity
+            fill_opacity=fill_opacity,
         )
         return _apply_common_bindings(layer)
 
     def _polygon_geojson(gj_feature):
-        # Style function for GeoJson to mirror the explicit style args
         def _style_fn(_feature):
             return {
                 "color": color,
                 "weight": weight,
                 "opacity": opacity,
                 "dashArray": dash_array if isinstance(dash_array, str)
-                    else (",".join(map(str, dash_array)) if dash_array else None),
+                else (",".join(map(str, dash_array)) if dash_array else None),
                 "fill": fill,
                 "fillColor": (fill_color or color),
                 "fillOpacity": fill_opacity,
-                # Optional: add a class so CSS can target only these if needed
-                "className": "no-focus-outline"
+                "className": "no-focus-outline",
             }
         layer = folium.GeoJson(gj_feature, style_function=_style_fn)
         return _apply_common_bindings(layer)
+
+    # ---- Point renderers (no typing) ----
+    def _render_point(lat, lon):
+        """Return a Folium layer for a single point with the requested style."""
+        # Hard override if caller provides a custom renderer
+        if callable(point_renderer):
+            layer = point_renderer(lat, lon)
+            return _apply_common_bindings(layer)
+
+        # Default legacy behavior: folium.Marker using `icon` if caller provided one,
+        # and no point_shape hint is set.
+        if point_shape is None or str(point_shape).lower() == "marker":
+            mk = folium.Marker([lat, lon], icon=icon if icon is not None else None)
+            return _apply_common_bindings(mk)
+
+        shape = str(point_shape).lower()
+
+        # Circle marker
+        if shape == "circle":
+            cm = folium.CircleMarker(
+                location=[lat, lon],
+                radius=int(point_radius),
+                color=point_color,
+                weight=int(point_weight),
+                fill=True,
+                fill_color=(point_fill_color or color),
+                fill_opacity=float(point_fill_opacity),
+                opacity=float(opacity),
+            )
+            return _apply_common_bindings(cm)
+
+        # Square marker (RegularPolygonMarker with 4 sides)
+        if shape == "square":
+            rpm = folium.RegularPolygonMarker(
+                location=[lat, lon],
+                number_of_sides=4,
+                radius=int(point_radius),
+                rotation=0,
+                color=point_color,
+                weight=int(point_weight),
+                fill=True,
+                fill_color=(point_fill_color or color),
+                fill_opacity=float(point_fill_opacity),
+                opacity=float(opacity),
+            )
+            return _apply_common_bindings(rpm)
+
+        # Fallback to Marker if an unknown shape is given
+        mk = folium.Marker([lat, lon], icon=icon if icon is not None else None)
+        return _apply_common_bindings(mk)
 
     # ---------- Optional explicit interpretation using feature_type ----------
     ft = (feature_type or "").strip().lower() if isinstance(feature_type, str) else None
@@ -240,27 +285,26 @@ def geometry_to_folium(
         first = geom[0]
 
         if ft in ("point", "multipoint", "line", "linestring", "polyline", "polygon"):
-
             if ft in ("point", "multipoint") and is_num_pair(first):
                 if len(geom) == 1:
                     lon, lat = geom[0]
-                    return _marker(lat, lon)
+                    return _render_point(lat, lon)
                 fg = folium.FeatureGroup()
                 for lon, lat in (p for p in geom if is_num_pair(p)):
-                    _marker(lat, lon).add_to(fg)
+                    _render_point(lat, lon).add_to(fg)
                 return _apply_common_bindings(fg)
 
             if ft in ("line", "linestring", "polyline"):
                 if is_num_pair(first):
                     if len(geom) == 1:
                         lon, lat = geom[0]
-                        return _marker(lat, lon)
+                        return _render_point(lat, lon)
                     return _polyline(
                         locations=to_latlon(geom),
                         color=color,
                         weight=weight,
                         opacity=opacity,
-                        dash_array=dash_array
+                        dash_array=dash_array,
                     )
                 if isinstance(first, list) and len(first) > 0 and is_num_pair(first[0]):
                     fg = folium.FeatureGroup()
@@ -269,14 +313,14 @@ def geometry_to_folium(
                             continue
                         if len(part) == 1 and is_num_pair(part[0]):
                             lon, lat = part[0]
-                            _marker(lat, lon).add_to(fg)
+                            _render_point(lat, lon).add_to(fg)
                         else:
                             _polyline(
                                 locations=to_latlon(part),
                                 color=color,
                                 weight=weight,
                                 opacity=opacity,
-                                dash_array=dash_array
+                                dash_array=dash_array,
                             ).add_to(fg)
                     return _apply_common_bindings(fg)
 
@@ -294,8 +338,7 @@ def geometry_to_folium(
         if is_num_pair(first):
             if len(geom) == 1:
                 lon, lat = geom[0]
-                return _marker(lat, lon)
-
+                return _render_point(lat, lon)
             is_closed = len(geom) >= 4 and geom[0] == geom[-1]
             if is_closed:
                 gj = polygon_geojson_from_rings([geom])
@@ -306,9 +349,8 @@ def geometry_to_folium(
                     color=color,
                     weight=weight,
                     opacity=opacity,
-                    dash_array=dash_array
+                    dash_array=dash_array,
                 )
-
         if isinstance(first, list) and len(first) > 0 and is_num_pair(first[0]):
             first_is_closed = len(first) >= 4 and first[0] == first[-1]
             if first_is_closed:
@@ -321,14 +363,14 @@ def geometry_to_folium(
                         continue
                     if len(part) == 1 and is_num_pair(part[0]):
                         lon, lat = part[0]
-                        _marker(lat, lon).add_to(fg)
+                        _render_point(lat, lon).add_to(fg)
                     else:
                         _polyline(
                             locations=to_latlon(part),
                             color=color,
                             weight=weight,
                             opacity=opacity,
-                            dash_array=dash_array
+                            dash_array=dash_array,
                         ).add_to(fg)
                 return _apply_common_bindings(fg)
 
@@ -346,7 +388,14 @@ def geometry_to_folium(
                 tooltip=tooltip,
                 popup=popup,
                 icon=icon,
-                feature_type=None
+                point_shape=point_shape,
+                point_radius=point_radius,
+                point_color=point_color,
+                point_weight=point_weight,
+                point_fill_color=point_fill_color,
+                point_fill_opacity=point_fill_opacity,
+                point_renderer=point_renderer,
+                feature_type=None,
             )
             layer.add_to(grp)
         return _apply_common_bindings(grp)
@@ -354,12 +403,12 @@ def geometry_to_folium(
     # ---- DICT HANDLING (ArcGIS-style) ----
     if isinstance(geom, dict):
         if "x" in geom and "y" in geom:
-            return _marker(geom["y"], geom["x"])
+            return _render_point(geom["y"], geom["x"])
 
         if "points" in geom:
             fg = folium.FeatureGroup()
             for x, y in (geom.get("points") or []):
-                _marker(y, x).add_to(fg)
+                _render_point(y, x).add_to(fg)
             return _apply_common_bindings(fg)
 
         if "paths" in geom:
@@ -370,14 +419,14 @@ def geometry_to_folium(
                     continue
                 if len(path) == 1 and is_num_pair(path[0]):
                     x, y = path[0]
-                    _marker(y, x).add_to(fg)
+                    _render_point(y, x).add_to(fg)
                 else:
                     _polyline(
                         locations=to_latlon(path),
                         color=color,
                         weight=weight,
                         opacity=opacity,
-                        dash_array=dash_array
+                        dash_array=dash_array,
                     ).add_to(fg)
             return _apply_common_bindings(fg)
 
@@ -389,6 +438,7 @@ def geometry_to_folium(
             return _polygon_geojson(gj)
 
     raise ValueError("Unsupported geometry type or structure")
+
 
 
 

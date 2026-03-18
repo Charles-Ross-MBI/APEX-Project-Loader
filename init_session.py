@@ -210,6 +210,7 @@ def init_session_state():
         'traffic_impact_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/TRAFFIC_IMPACT_EVENTS_LOADER_APPLICATION/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_TRAFFIC_IMPACTS_LOADER/FeatureServer",
         "milepoints_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
+        "mileposts_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOTPF_Route_Data/FeatureServer",
         'communities_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
     }
 

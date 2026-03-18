@@ -213,6 +213,96 @@ def query_record(url: str, layer: int, where: str, fields="*", return_geometry=F
 
 
 
+def query_geometry(url: str, layer: int):
+    """
+    Queries an ArcGIS REST API layer and returns ONLY geometries with inferred type.
+
+    Returns:
+        dict:
+            {
+                "type": "<point|multipoint|polyline|polygon|mixed|none>",
+                "geometry": [list of geometry dicts in outSR 4326]
+            }
+            - "mixed" when multiple geometry types are present.
+            - "none" when no geometries are returned.
+    """
+    token = get_agol_token()
+    if not token:
+        raise ValueError("Authentication failed: Invalid token.")
+
+    # Normalize URL so we don't double-append the layer
+    url = url.rstrip("/")
+
+    # If the URL already ends with the layer number, don't add it again
+    if url.split("/")[-1].isdigit():
+        query_url = f"{url}/query"
+    else:
+        query_url = f"{url}/{layer}/query"
+
+    params = {
+        "where": "1=1",           # Adjust upstream if you need a specific filter
+        "outFields": "OBJECTID",   # Minimal fields to reduce payload
+        "returnGeometry": True,
+        "outSR": 4326,
+        "f": "json",
+        "token": token,
+    }
+
+    response = requests.get(query_url, params=params)
+    if response.status_code != 200:
+        raise Exception(
+            f"Request failed with status code {response.status_code}: {response.text}"
+        )
+
+    data = response.json()
+    if "error" in data:
+        raise Exception(
+            f"API Error: {data['error']['message']} - {data['error'].get('details', [])}"
+        )
+
+    features = data.get("features", []) or []
+
+    # Collect geometries only (skip features missing geometry)
+    geometries = [f.get("geometry") for f in features if f.get("geometry") is not None]
+
+    # Helper: infer type from an ESRI geometry dict
+    def _infer_geom_type(g: dict) -> str:
+        # ArcGIS JSON geometry keys: x/y, points, paths, rings
+        if not isinstance(g, dict):
+            return "unknown"
+        if "x" in g and "y" in g:
+            return "point"
+        if "points" in g:
+            return "multipoint"
+        if "paths" in g:
+            return "polyline"
+        if "rings" in g:
+            return "polygon"
+        return "unknown"
+
+    if not geometries:
+        return {"type": "none", "geometry": []}
+
+    inferred = {_infer_geom_type(g) for g in geometries}
+    # Remove 'unknown' if there are known types present
+    if len(inferred) > 1 and "unknown" in inferred:
+        inferred.discard("unknown")
+
+    if not inferred:
+        geom_type = "unknown"
+    elif len(inferred) == 1:
+        geom_type = next(iter(inferred))
+    else:
+        geom_type = "mixed"
+
+    return {
+        "type": geom_type,
+        "geometry": geometries
+    }
+
+
+
+
 
 # =============================================================================
 # PULL AASHTOWARE GEOMETRY RECORD
