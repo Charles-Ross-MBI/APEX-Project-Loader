@@ -226,7 +226,7 @@ def project_details_form():
         _preload_from_snapshot(current_option)
 
     if current_option == "AASHTOWare Database":
-        st.markdown("###### SELECT PROJECT AASHTOWARE PROJECT\n", unsafe_allow_html=True)
+        st.markdown("###### SELECT AASHTOWARE PROJECT\n", unsafe_allow_html=True)
 
         # Keep AWP dropdown aligned to last saved selection
         version = st.session_state.get("form_version", 0)

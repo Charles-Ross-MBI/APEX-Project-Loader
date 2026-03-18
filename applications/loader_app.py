@@ -97,7 +97,7 @@ def run_loader_app():
     elif st.session_state.loader_step == 2:
         st.markdown("### PROJECT INFORMATION 📄")
         st.write(
-        "Choose either the AASHTOWare source or User Input to provide project details. "
+        "Choose either the AASHTOWare Database or User Input option to provide project details. "
         "Complete the form, then click **Submit Information**, this will check to see if all required values are present.  If"
         " all information is present and in the correct format, you will be able to continue"
         )
