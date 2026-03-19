@@ -23,12 +23,10 @@ def run_manager_app():
         guid = st.session_state.get("guid")
         url = st.session_state.get("apex_url")
         layer = st.session_state.get("projects_layer")
-
         if not guid or not url or layer is None:
             st.session_state["project_record"] = None
             st.session_state["objectid"] = None
             return
-
         try:
             rec = select_record(
                 url,
@@ -119,10 +117,8 @@ def run_manager_app():
         """
         if not rec_list or not isinstance(rec_list, list):
             raise ValueError("Empty APEX response")
-
         feature = rec_list[0]
         attrs = feature.get("attributes", {})
-
         st.session_state["apex_guid"] = attrs.get("globalid")
         st.session_state['apex_awp_name'] = attrs.get('AWP_Proj_Name')
         st.session_state['apex_proj_name'] = attrs.get('Proj_Name')
@@ -143,15 +139,14 @@ def run_manager_app():
             return
 
         globalids, objectids, geoms = [], [], []
-
         for feature in rec_list:
             if not isinstance(feature, dict):
                 continue
             attrs = feature.get("attributes", {}) or {}
             globalids.append(attrs.get("globalid"))
             objectids.append(attrs.get("objectid"))
-
             g = feature.get("geometry", {}) or {}
+
             if proj_type == "Site":
                 if "x" in g and "y" in g:
                     geoms.append([g["x"], g["y"]])
@@ -320,13 +315,11 @@ def run_manager_app():
         if not projects_url or projects_layer is None:
             st.error("Missing `apex_url` and/or `projects_layer` in session state. Initialize app session before opening Manager.")
             return
-
         try:
             projects = get_multiple_fields(projects_url, projects_layer, ["Proj_Name", "globalid"])
         except Exception as e:
             st.error(f"Failed to load project list: {e}")
             projects = []
-
         label_to_gid = {
             p.get("Proj_Name"): p.get("globalid")
             for p in projects
@@ -418,13 +411,28 @@ def run_manager_app():
             st.write('')
             st.markdown("<h5>CHOOSE A CATEGORY TO MANAGE</h5>", unsafe_allow_html=True)
 
+            # Available tabs (labels) – unchanged
+            options = ["INFORMATION", "FOOTPRINT", "TRAFFIC IMPACTS", "COMMUNITIES", "DEPLOYMENT"]
+
+            # ✅ NEW: Preselect from session state's `manager_tab` (if valid).
+            # This runs BEFORE rendering the segmented control and only updates
+            # the widget value when `manager_tab` changes, so we don't override
+            # the user's manual selection on later reruns.
+            mt_raw = st.session_state.get("manager_tab")
+            if isinstance(mt_raw, str):
+                mt = mt_raw.strip().upper()
+                if mt in options:
+                    if st.session_state.get("_last_manager_tab") != mt:
+                        st.session_state["_last_manager_tab"] = mt
+                        st.session_state[tabs_key] = mt
+
             # Keep the same "methodology": on_change only bumps a counter (causes rerun)
             def _on_manager_tab_change():
                 st.session_state["manager_tab_change_counter"] = st.session_state.get("manager_tab_change_counter", 0) + 1
 
             choice = st.segmented_control(
                 "Select a Category",
-                options=["INFORMATION", "FOOTPRINT", "TRAFFIC IMPACTS", "COMMUNITIES", "DEPLOYMENT"],
+                options=options,
                 key=tabs_key,
                 width='stretch',
                 on_change=_on_manager_tab_change
@@ -444,7 +452,7 @@ def run_manager_app():
             def _tab_communities():
                 with st.container(border=True):
                     st.info("Communities Management Tab Under Development")
-                #manage_impacted_communities()
+                # manage_impacted_communities()
 
             def _tab_deployment():
                 st.info("Deployment Management Tab Under Development")
