@@ -1,7 +1,8 @@
 import streamlit as st
 import json
 import hashlib
-from typing import Optional
+from typing import Optional, Callable
+
 from util.geometry_util import (
     select_route_and_points,  # injected selector; returns updated package (or None)
     geometry_to_folium,
@@ -27,8 +28,12 @@ def _fingerprint(obj) -> str:
 
 # ------------------------------------------------------------
 # Helper: fetch existing Traffic Impact Events for a project
+# - Now supports an optional progress callback for granular steps.
 # ------------------------------------------------------------
-def fetch_traffic_impacts(force: bool = False):
+def fetch_traffic_impacts(
+    force: bool = False,
+    progress_cb: Optional[Callable[[int, str], None]] = None
+):
     """
     Pull all Traffic Impact Events for the current APEX project (by apex_guid),
     and populate:
@@ -58,13 +63,18 @@ def fetch_traffic_impacts(force: bool = False):
         st.session_state["existing_tie_records"] = []
         st.session_state["traffic_impacts_list"] = []
         st.session_state["_tie_loaded_for_apex_guid"] = None
+        if progress_cb:
+            progress_cb(100, "No traffic impact configuration found")
         return []
 
     # Reuse previously pulled data unless force=True or apex_guid changed
     loaded_for = st.session_state.get("_tie_loaded_for_apex_guid")
     if not force and loaded_for == apex_guid:
+        if progress_cb:
+            progress_cb(100, "Traffic impacts already loaded")
         return st.session_state.get("existing_tie_records", []) or []
 
+    # --- helpers for geometry normalization ---
     def _as_lonlat_list(lines_geom):
         if not lines_geom:
             return []
@@ -97,6 +107,9 @@ def fetch_traffic_impacts(force: bool = False):
             return None
         return {"lonlat": [x, y], "lat": y, "lng": x}
 
+    # ---------------- Query parent features ----------------
+    if progress_cb:
+        progress_cb(20, "Querying traffic impacts…")
     parent_features = select_record(
         url=ti_url,
         layer=lyr_parent,
@@ -106,26 +119,34 @@ def fetch_traffic_impacts(force: bool = False):
         return_geometry=True,
     ) or []
 
+    # ---------------- Query children per parent ----------------
+    total = max(1, len(parent_features))
     records = []
-    for feat in parent_features:
+    for idx, feat in enumerate(parent_features, start=1):
+        if progress_cb:
+            pct = 20 + int(60 * (idx - 1) / total)
+            progress_cb(pct, f"Loading event {idx}/{total}… (parent)")
+
         attrs = feat.get("attributes") or {}
         geom = feat.get('geometry') or {}
         ti_guid = attrs.get("globalid")
         ti_objectid = attrs.get("objectid")
 
-        # --- NAME NORMALIZATION (requested):
-        # If the existing Traffic Impact Event has Event_Name == "Blank Traffic Impact Event",
+        # NAME NORMALIZATION (requested):
+        # If the existing Traffic Impact Event has Event_Name == "Blank Event",
         # rewrite it to "New Event" before passing forward.
         raw_name = attrs.get("Event_Name")
         ti_event_name = (
             "New Event" if isinstance(raw_name, str) and raw_name.strip() == "Blank Event"
             else raw_name
         )
-
         ti_route_id = attrs.get("Route_ID")
         ti_route_name = attrs.get("Route_Name")
         ti_impact_area = geom.get("rings")  # polygon rings (lon,lat)
 
+        # Route
+        if progress_cb:
+            progress_cb(pct + 5, f"Loading event {idx}/{total}… (route)")
         route_features = select_record(
             url=ti_url,
             layer=lyr_routes,
@@ -140,6 +161,9 @@ def fetch_traffic_impacts(force: bool = False):
             route_objectid = (rf.get("attributes") or {}).get("objectid")
             route_geom_lonlat = _as_lonlat_list(rf.get("geometry") or {})
 
+        # Start
+        if progress_cb:
+            progress_cb(pct + 15, f"Loading event {idx}/{total}… (start)")
         start_features = select_record(
             url=ti_url,
             layer=lyr_start,
@@ -154,6 +178,9 @@ def fetch_traffic_impacts(force: bool = False):
             start_objectid = (sf.get("attributes") or {}).get("objectid")
             start_point = _as_point_dict(sf.get("geometry") or {})
 
+        # End
+        if progress_cb:
+            progress_cb(pct + 25, f"Loading event {idx}/{total}… (end)")
         end_features = select_record(
             url=ti_url,
             layer=lyr_end,
@@ -185,6 +212,9 @@ def fetch_traffic_impacts(force: bool = False):
         }
         records.append(rec)
 
+    # ---------------- Stage into session ----------------
+    if progress_cb:
+        progress_cb(85, "Staging events…")
     st.session_state["existing_tie_records"] = records
 
     # Keep IDs in the working list so they flow into the selector (existing events)
@@ -204,8 +234,10 @@ def fetch_traffic_impacts(force: bool = False):
         }
         for r in records
     ]
-
     st.session_state["_tie_loaded_for_apex_guid"] = apex_guid
+    if progress_cb:
+        progress_cb(95, "Finalizing…")
+        progress_cb(100, "Done")
     return records
 
 
@@ -244,6 +276,7 @@ def _deploy_to_agol(
         "start": AGOLDataLoader(base_url, lyr_start),
         "end": AGOLDataLoader(base_url, lyr_end),
     }
+
     step_names = {
         "parent": "Parent polygon",
         "route": "Impacted route",
@@ -309,13 +342,11 @@ def _deploy_to_agol(
         st.session_state["traffic_impact_globalid"] = None  # clear stale
         parent_only = manage_traffic_impact_payloads(package, edit_type="adds", which="parent")
         parent_section = parent_only.get("parent", {})
-
         progress.progress(0 / total, text=f"{step_names['parent']}: preparing...")
         mode, adapted = _adapt_for_loader("adds", parent_section)
         res_parent = loaders["parent"].add_features(adapted)
         results["parent"] = res_parent
         progress.progress(1 / total, text=f"{step_names['parent']}: {'OK' if res_parent.get('success') else 'FAILED'}")
-
         if not (res_parent and res_parent.get("success")):
             st.error("Parent add failed; child features were not created.")
             return results
@@ -336,8 +367,7 @@ def _deploy_to_agol(
             results[key] = res
             progress.progress(i / total, text=f"{step_names[key]}: {'OK' if res.get('success') else 'FAILED'}")
 
-        # (Optional) clear the bar when done:
-        # progress_placeholder.empty() if progress_placeholder else None
+        # caller decides whether to clear the bar
         return results
 
     # ---------- UPDATES / DELETES (single-pass) ----------
@@ -346,11 +376,9 @@ def _deploy_to_agol(
     payloads = manage_traffic_impact_payloads(package, edit_type=edit_type, which="all")
     progress = _progress_init(0, text=f"Starting {edit_type}...")
     total = len(order)
-
     for i, key in enumerate(order, start=1):
         progress.progress((i - 1) / total, text=f"{step_names[key]}: preparing...")
         mode, adapted = _adapt_for_loader(edit_type, payloads.get(key, {}))
-
         if mode == "adds":
             res = loaders[key].add_features(adapted)
         elif mode == "updates":
@@ -359,13 +387,47 @@ def _deploy_to_agol(
             res = loaders[key].delete_features(adapted)
         else:
             res = {"success": False, "message": f"Unknown mode {mode}", "globalids": []}
-
         results[key] = res
         progress.progress(i / total, text=f"{step_names[key]}: {'OK' if res.get('success') else 'FAILED'}")
 
-    # (Optional) clear the bar when done:
-    # progress_placeholder.empty() if progress_placeholder else None
     return results
+
+
+# ---------------------------------------------------------------------
+# MOVED UP to avoid "free variable ... before assignment" errors.
+# These helpers were previously nested inside manage_traffic_impacts().
+# Keeping behavior identical; only their location changed.
+# ---------------------------------------------------------------------
+def _new_event(label="New Event", impact_area_default=None):
+    eid = st.session_state["tie_next_id"]
+    st.session_state["tie_next_id"] += 1
+    return {
+        "event_id": eid,
+        "label": label,
+        "selected_impact_area": impact_area_default,
+        "selected_route_geom": None,
+        "selected_route_id": None,
+        "selected_route_name": None,
+        "selected_start_point": None,
+        "selected_end_point": None,
+        "initialized_from_record": False,
+    }
+
+
+def _event_from_record(rec, impact_area_default=None):
+    ev = _new_event(
+        label=(rec.get("name") or f"Traffic Impact @ {rec.get('route_name') or '—'}"),
+        impact_area_default=impact_area_default,
+    )
+    ev["selected_route_geom"] = rec.get("route_geom")
+    ev["selected_start_point"] = rec.get("start_point")
+    ev["selected_end_point"] = rec.get("end_point")
+    ev["selected_route_id"] = rec.get("route_id")
+    ev["selected_route_name"] = rec.get("route_name")
+    ev["initialized_from_record"] = True
+    if rec.get("area"):
+        ev["selected_impact_area"] = rec.get("area")
+    return ev
 
 
 def manage_traffic_impacts():
@@ -396,39 +458,6 @@ def manage_traffic_impacts():
     st.session_state.setdefault("traffic_impacts_list", [])
 
     # ------------------------------------------------------------
-    # Helper defs (unchanged)
-    # ------------------------------------------------------------
-    def _new_event(label="New Event", impact_area_default=None):
-        eid = st.session_state["tie_next_id"]
-        st.session_state["tie_next_id"] += 1
-        return {
-            "event_id": eid,
-            "label": label,
-            "selected_impact_area": impact_area_default,
-            "selected_route_geom": None,
-            "selected_route_id": None,
-            "selected_route_name": None,
-            "selected_start_point": None,
-            "selected_end_point": None,
-            "initialized_from_record": False,
-        }
-
-    def _event_from_record(rec, impact_area_default=None):
-        ev = _new_event(
-            label=(rec.get("name") or f"Traffic Impact @ {rec.get('route_name') or '—'}"),
-            impact_area_default=impact_area_default,
-        )
-        ev["selected_route_geom"] = rec.get("route_geom")
-        ev["selected_start_point"] = rec.get("start_point")
-        ev["selected_end_point"] = rec.get("end_point")
-        ev["selected_route_id"] = rec.get("route_id")
-        ev["selected_route_name"] = rec.get("route_name")
-        ev["initialized_from_record"] = True
-        if rec.get("area"):
-            ev["selected_impact_area"] = rec.get("area")
-        return ev
-
-    # ------------------------------------------------------------
     # Header (title + Add button in the same row)
     # ------------------------------------------------------------
     title_text = "##### MANAGE TRAFFIC IMPACT EVENTS"
@@ -449,292 +478,326 @@ def manage_traffic_impacts():
 
     # ------------------------------------------------------------
     # Impact buffer (cached per project geometry + params)
+    # → now wrapped in the page-level progress sequence
     # ------------------------------------------------------------
-    proj_area = st.session_state.get("apex_proj_area")
-    buffer_params = ("polygon", 2000)
-    impact_sig = _fingerprint([proj_area, buffer_params])
-    if st.session_state.get("_impact_area_sig") != impact_sig:
-        impact_area = create_buffers(proj_area, buffer_params[0], buffer_params[1])
-        if not impact_area:
-            raise RuntimeError("Buffering the current APEX project area produced no output.")
-        st.session_state["impact_area"] = impact_area
-        st.session_state["_impact_area_sig"] = impact_sig
-        for ev in st.session_state.get("tie_events", []):
-            ev["selected_impact_area"] = impact_area
-    impact_area = st.session_state.get("impact_area")
 
-    # ------------------------------------------------------------
-    # Pull and stage existing Traffic Impact Events (lazy)
-    # ------------------------------------------------------------
-    pulled_records = fetch_traffic_impacts(force=False)
-    existing_records = bool(pulled_records)
+    # Ephemeral progress bar (full-width just above the events area)
+    progress_holder = st.empty()
+    progress = progress_holder.progress(0, text="Initializing…")
 
-    # ------------------------------------------------------------
-    # Initialize event list from existing records (first-time only)
-    # ------------------------------------------------------------
-    if pulled_records and not st.session_state["tie_events"]:
-        st.session_state["tie_events"] = [
-            _event_from_record(r, impact_area_default=impact_area) for r in pulled_records
-        ]
-
-    events = st.session_state["tie_events"]
-
-    # ------------------------------------------------------------
-    # Helpers for package resolution and CLEAR behavior (unchanged)
-    # ------------------------------------------------------------
-    def _resolve_package_for_event(ev) -> dict:
-        impacts = st.session_state.get("traffic_impacts_list", []) or []
-        rid = ev.get("selected_route_id")
-        sp = ev.get("selected_start_point")
-        ep = ev.get("selected_end_point")
-        for p in impacts:
-            if p.get("route_id") == rid and p.get("start_point") == sp and p.get("end_point") == ep:
-                p.setdefault("name", ev.get("label"))
-                return p
-        return {
-            "route_id": ev.get("selected_route_id"),
-            "route_name": ev.get("selected_route_name"),
-            "route_geom": ev.get("selected_route_geom"),
-            "start_point": ev.get("selected_start_point"),
-            "end_point": ev.get("selected_end_point"),
-            "area": st.session_state.get("impact_area"),
-        }
-
-    def _clear_tab_selection(key_prefix: str):
-        ti_key = f"{key_prefix}traffic_impact"
-        sel_id_key = f"{key_prefix}selected_route_id"
-        sel_name_key = f"{key_prefix}selected_route_name"
-        sel_geom_key = f"{key_prefix}selected_route_geom"
-        seg_key = f"{key_prefix}place_mode_v2"
-        fit_geom_key = f"{key_prefix}fit_bounds_geom"
-        map_key = f"{key_prefix}route_map"
-
-        # 1) Clear the working TI dict (route + points)
-        st.session_state.setdefault(ti_key, {})
-        st.session_state[ti_key].update(
-            {"route_id": None, "route_name": None, "route_geom": None, "start_point": None, "end_point": None}
-        )
-
-        # 2) Drop selector caches that re-seed the UI
-        st.session_state.pop(sel_id_key, None)
-        st.session_state.pop(sel_name_key, None)
-        st.session_state.pop(sel_geom_key, None)
-        st.session_state.pop(f"{key_prefix}selected_start_point", None)
-        st.session_state.pop(f"{key_prefix}selected_end_point", None)
-
-        # 3) Reset segmented control back to the first step
-        st.session_state.pop(seg_key, None)
-
-        # 4) Remove any sticky fit-bounds geom so viewport recalculates from project/area
-        st.session_state.pop(fit_geom_key, None)
-
-        # 5) One-shot flag so the selector knows to SKIP seeding from any passed-in package
-        st.session_state[f"{key_prefix}__ti_just_cleared"] = True
-
-        # 6) Map interaction reset
+    def _step(pct: int, label: str):
         try:
-            st.session_state.setdefault(map_key, {})
-            st.session_state[map_key]["last_clicked"] = None
+            progress.progress(max(0, min(100, pct)), text=label)
+        except Exception:
+            try:
+                progress.progress(max(0, min(100, pct)))
+            except Exception:
+                pass
+
+    try:
+        _step(5, "Preparing project context…")
+        proj_area = st.session_state.get("apex_proj_area")
+        buffer_params = ("polygon", 2000)
+
+        _step(12, "Computing project impact buffer…")
+        impact_sig = _fingerprint([proj_area, buffer_params])
+        if st.session_state.get("_impact_area_sig") != impact_sig:
+            impact_area = create_buffers(proj_area, buffer_params[0], buffer_params[1])
+            if not impact_area:
+                # Fail early with a clear message; progress bar will still be cleared in finally
+                raise RuntimeError("Buffering the current APEX project area produced no output.")
+            st.session_state["impact_area"] = impact_area
+            st.session_state["_impact_area_sig"] = impact_sig
+            # propagate refreshed area into any already-initialized events
+            for ev in st.session_state.get("tie_events", []):
+                ev["selected_impact_area"] = impact_area
+
+        impact_area = st.session_state.get("impact_area")
+
+        # ------------------------------------------------------------
+        # Pull and stage existing Traffic Impact Events (lazy)
+        # Uses sub-step reporting from fetch_traffic_impacts
+        # ------------------------------------------------------------
+        _step(22, "Loading traffic impact events…")
+
+        def _fetch_step(p: int, msg: str):
+            # Clamp into [22..85] for visual continuity with the outer steps.
+            p = max(22, min(85, p))
+            _step(p, msg)
+
+        pulled_records = fetch_traffic_impacts(force=False, progress_cb=_fetch_step)
+        existing_records = bool(pulled_records)
+
+        # ------------------------------------------------------------
+        # Initialize event list from existing records (first-time only)
+        # ------------------------------------------------------------
+        _step(88, "Staging page UI…")
+        if pulled_records and not st.session_state["tie_events"]:
+            st.session_state["tie_events"] = [
+                _event_from_record(r, impact_area_default=impact_area) for r in pulled_records
+            ]
+
+        events = st.session_state["tie_events"]
+
+        # ------------------------------------------------------------
+        # Helpers — kept here to preserve structure and behavior
+        # ------------------------------------------------------------
+        def _resolve_package_for_event(ev) -> dict:
+            impacts = st.session_state.get("traffic_impacts_list", []) or []
+            rid = ev.get("selected_route_id")
+            sp = ev.get("selected_start_point")
+            ep = ev.get("selected_end_point")
+            for p in impacts:
+                if p.get("route_id") == rid and p.get("start_point") == sp and p.get("end_point") == ep:
+                    p.setdefault("name", ev.get("label"))
+                    return p
+            return {
+                "route_id": ev.get("selected_route_id"),
+                "route_name": ev.get("selected_route_name"),
+                "route_geom": ev.get("selected_route_geom"),
+                "start_point": ev.get("selected_start_point"),
+                "end_point": ev.get("selected_end_point"),
+                "area": st.session_state.get("impact_area"),
+            }
+
+        def _clear_tab_selection(key_prefix: str):
+            ti_key = f"{key_prefix}traffic_impact"
+            sel_id_key = f"{key_prefix}selected_route_id"
+            sel_name_key = f"{key_prefix}selected_route_name"
+            sel_geom_key = f"{key_prefix}selected_route_geom"
+            seg_key = f"{key_prefix}place_mode_v2"
+            fit_geom_key = f"{key_prefix}fit_bounds_geom"
+            map_key = f"{key_prefix}route_map"
+
+            # 1) Clear the working TI dict (route + points)
+            st.session_state.setdefault(ti_key, {})
+            st.session_state[ti_key].update(
+                {"route_id": None, "route_name": None, "route_geom": None, "start_point": None, "end_point": None}
+            )
+
+            # 2) Drop selector caches that re-seed the UI
+            st.session_state.pop(sel_id_key, None)
+            st.session_state.pop(sel_name_key, None)
+            st.session_state.pop(sel_geom_key, None)
+            st.session_state.pop(f"{key_prefix}selected_start_point", None)
+            st.session_state.pop(f"{key_prefix}selected_end_point", None)
+
+            # 3) Reset segmented control back to the first step
+            st.session_state.pop(seg_key, None)
+
+            # 4) Remove any sticky fit-bounds geom so viewport recalculates from project/area
+            st.session_state.pop(fit_geom_key, None)
+
+            # 5) One-shot flag so the selector knows to SKIP seeding from any passed-in package
+            st.session_state[f"{key_prefix}__ti_just_cleared"] = True
+
+            # 6) Map interaction reset
+            try:
+                st.session_state.setdefault(map_key, {})
+                st.session_state[map_key]["last_clicked"] = None
+            except Exception:
+                pass
+
+        def _render_event_panel(ev, impact_area_current):
+            if ev["selected_impact_area"] is None:
+                ev["selected_impact_area"] = impact_area_current
+
+            key_prefix = f"ev{ev['event_id']}_"
+            package_in = _resolve_package_for_event(ev)
+            is_existing = bool(ev.get("initialized_from_record"))
+            if not is_existing:
+                impacts = st.session_state.get("traffic_impacts_list") or []
+                is_existence_alias = any(package_in is p for p in impacts)  # back-compat
+                if is_existence_alias:
+                    is_existing = True
+
+            # For existing events, buffer the area by 2000 m for display/query,
+            # but do NOT mutate the stored area in package_in.
+            package_for_selector = package_in
+            if is_existing:
+                try:
+                    pkg_area = (package_in or {}).get("area")
+                    if pkg_area:
+                        buffered_area = create_buffers(pkg_area, distance_meters=2000)
+                        if buffered_area:
+                            # shallow copy so we don't change the incoming dict
+                            package_for_selector = dict(package_in)
+                            package_for_selector["area"] = buffered_area
+                except Exception:
+                    # On any failure, fall back to the unbuffered package
+                    package_for_selector = package_in
+
+            # --- Second container: ONLY wrap the selector function ---
+            selector_container = st.container(border=False)
+            with selector_container:
+                try:
+                    package_out = select_route_and_points(
+                        selector_container,
+                        key_prefix=key_prefix,
+                        is_existing=is_existing,
+                        package=package_for_selector,  # <-- use buffered area when existing
+                    )
+                except TypeError:
+                    package_out = select_route_and_points(selector_container, key_prefix=key_prefix)
+
+            # Persist returned data to event state
+            src = package_out if isinstance(package_out, dict) else {}
+            if "route_geom" in src:
+                ev["selected_route_geom"] = src.get("route_geom")
+            if "start_point" in src:
+                ev["selected_start_point"] = src.get("start_point")
+            if "end_point" in src:
+                ev["selected_end_point"] = src.get("end_point")
+            if "route_id" in src:
+                ev["selected_route_id"] = src.get("route_id")
+            if "route_name" in src:
+                ev["selected_route_name"] = src.get("route_name")
+
+            # --- Buttons row (directly below the selector container) ---
+            btn_col1, btn_col2 = st.columns([1, 1])
+
+            if is_existing:
+                # -------- EXISTING: UPDATE / DELETE --------
+                with btn_col1:
+                    if st.button("UPDATE", use_container_width=True, type="primary", key=f"{key_prefix}btn_update"):
+                        if not package_out:
+                            st.warning("Set a route and both Start/End points before updating.")
+                        else:
+                            # Create progress placeholder lazily (so no empty space when idle)
+                            progress_placeholder = st.container().empty()
+                            _ = _deploy_to_agol(
+                                package_out,
+                                edit_type="updates",
+                                progress_placeholder=progress_placeholder,  # <- shows just under buttons
+                            )
+
+                            # Force-refresh from AGOL so label picks up updated Event_Name
+                            impact_area = st.session_state.get("impact_area")
+                            pulled = fetch_traffic_impacts(force=True)
+                            st.session_state["tie_events"] = []
+                            st.session_state["tie_next_id"] = 1
+                            for rec in (pulled or []):
+                                st.session_state["tie_events"].append(
+                                    _event_from_record(rec, impact_area_default=impact_area)
+                                )
+                            st.rerun()
+
+                with btn_col2:
+                    if st.button("DELETE", use_container_width=True, key=f"{key_prefix}btn_delete"):
+                        if not package_out:
+                            st.warning("A valid package from the selector is required to delete.")
+                        else:
+                            try:
+                                progress_placeholder = st.container().empty()
+                                delete_result = _deploy_to_agol(
+                                    package_out,
+                                    edit_type="deletes",
+                                    progress_placeholder=progress_placeholder,  # <- shows just under buttons
+                                )
+                            except Exception as ex:
+                                st.error(f"Failed to delete on AGOL: {ex}")
+                                st.stop()
+
+                            ok_sections = [k for k, v in (delete_result or {}).items() if v.get("success")]
+                            fail_sections = [k for k, v in (delete_result or {}).items() if not v.get("success")]
+                            if fail_sections:
+                                st.warning(f"AGOL delete completed with partial failures: {', '.join(fail_sections)}")
+
+                            # Remove locally then rebuild from AGOL
+                            try:
+                                st.session_state["tie_events"].remove(ev)
+                            except ValueError:
+                                pass
+
+                            impact_area = st.session_state.get("impact_area")
+                            pulled = fetch_traffic_impacts(force=True)
+                            st.session_state["tie_events"] = []
+                            st.session_state["tie_next_id"] = 1
+                            for rec in (pulled or []):
+                                st.session_state["tie_events"].append(
+                                    _event_from_record(rec, impact_area_default=impact_area)
+                                )
+                            st.rerun()
+
+            else:
+                # -------- NEW: LOAD / CLEAR --------
+                with btn_col1:
+                    if st.button("LOAD", use_container_width=True, type="primary", key=f"{key_prefix}btn_load"):
+                        if not package_out:
+                            st.warning("Select a route and set both Start and End points before loading.")
+                        else:
+                            try:
+                                progress_placeholder = st.container().empty()
+                                add_result = _deploy_to_agol(
+                                    package_out,
+                                    edit_type="adds",
+                                    progress_placeholder=progress_placeholder,  # <- shows just under buttons
+                                )
+                            except Exception as ex:
+                                st.error(f"Failed to add on AGOL: {ex}")
+                                st.stop()
+
+                            ok_sections = [k for k, v in (add_result or {}).items() if v.get("success")]
+                            fail_sections = [k for k, v in (add_result or {}).items() if not v.get("success")]
+                            if fail_sections:
+                                st.warning(f"AGOL add completed with partial failures: {', '.join(fail_sections)}")
+
+                            impact_area = st.session_state.get("impact_area")
+                            pulled = fetch_traffic_impacts(force=True)
+                            st.session_state["tie_events"] = []
+                            st.session_state["tie_next_id"] = 1
+                            for rec in (pulled or []):
+                                st.session_state["tie_events"].append(
+                                    _event_from_record(rec, impact_area_default=impact_area)
+                                )
+                            st.rerun()
+
+                with btn_col2:
+                    if st.button("CLEAR", use_container_width=True, key=f"{key_prefix}btn_clear"):
+                        _clear_tab_selection(key_prefix)
+                        ev["label"] = "New Event"
+                        ev["selected_impact_area"] = st.session_state.get("impact_area")
+                        st.rerun()
+
+        # ------------------------------------------------------------
+        # Segmented control in place of tabs
+        # ------------------------------------------------------------
+        _step(94, "Preparing selector…")
+        if events:
+            # Build labels
+            labels = [
+                (ev["label"] if (isinstance(ev.get("label"), str) and ev["label"].strip()) else f"Event {i+1}")
+                for i, ev in enumerate(events)
+            ]
+            # Keep a stable, index-based selector so switching does not reconstruct all maps
+            st.session_state.setdefault("ti_event_selector", labels[0])
+            # If label list changed (e.g., after update/delete/add), clamp value
+            if st.session_state["ti_event_selector"] not in labels:
+                st.session_state["ti_event_selector"] = labels[0]
+
+            selection = st.segmented_control(
+                "Traffic Impact Events",
+                options=labels,
+                key="ti_event_selector",
+                width="stretch",
+                label_visibility="hidden"
+            )
+
+            with st.container(border=True):
+                # Render only the selected event in one container
+                idx = labels.index(selection)
+                _render_event_panel(events[idx], impact_area)
+        else:
+            if existing_records:
+                st.info("Existing Traffic Impact Events were found, but could not initialize tabs.")
+            else:
+                st.info("No existing Traffic Impact Events were found for this project.")
+
+        _step(100, "Done")
+
+    finally:
+        # Always clear the progress bar so it disappears when we're done (or if errors occurred)
+        try:
+            progress_holder.empty()
         except Exception:
             pass
-
-    # ------------------------------------------------------------
-    # Event renderer — selector + per-event buttons (reused)
-    # - SECOND CONTAINER wraps ONLY the selector function.
-    # - Buttons come immediately after, outside that container.
-    # - Progress bar is created lazily (only on click) so there's no idle space.
-    # ------------------------------------------------------------
-    def _render_event_panel(ev, impact_area_current):
-        if ev["selected_impact_area"] is None:
-            ev["selected_impact_area"] = impact_area_current
-
-        key_prefix = f"ev{ev['event_id']}_"
-        package_in = _resolve_package_for_event(ev)
-        is_existing = bool(ev.get("initialized_from_record"))
-
-        if not is_existing:
-            impacts = st.session_state.get("traffic_impacts_list") or []
-            is_existence_alias = any(package_in is p for p in impacts)  # back-compat
-            if is_existence_alias:
-                is_existing = True
-
-        # --- NEW: For existing events, buffer the area by 800 m for display/query,
-        # but do NOT mutate the stored area in package_in.
-        package_for_selector = package_in
-        if is_existing:
-            try:
-                pkg_area = (package_in or {}).get("area")
-                if pkg_area:
-                    buffered_area = create_buffers(pkg_area, distance_meters=2000)
-                    if buffered_area:
-                        # shallow copy so we don't change the incoming dict
-                        package_for_selector = dict(package_in)
-                        package_for_selector["area"] = buffered_area
-            except Exception:
-                # On any failure, fall back to the unbuffered package
-                package_for_selector = package_in
-
-        # --- Second container: ONLY wrap the selector function ---
-        selector_container = st.container(border=False)
-        with selector_container:
-            try:
-                package_out = select_route_and_points(
-                    selector_container,
-                    key_prefix=key_prefix,
-                    is_existing=is_existing,
-                    package=package_for_selector,  # <-- use buffered area when existing
-                )
-            except TypeError:
-                package_out = select_route_and_points(selector_container, key_prefix=key_prefix)
-
-        # Persist returned data to event state
-        src = package_out if isinstance(package_out, dict) else {}
-        if "route_geom" in src:
-            ev["selected_route_geom"] = src.get("route_geom")
-        if "start_point" in src:
-            ev["selected_start_point"] = src.get("start_point")
-        if "end_point" in src:
-            ev["selected_end_point"] = src.get("end_point")
-        if "route_id" in src:
-            ev["selected_route_id"] = src.get("route_id")
-        if "route_name" in src:
-            ev["selected_route_name"] = src.get("route_name")
-
-        # --- Buttons row (directly below the selector container) ---
-        btn_col1, btn_col2 = st.columns([1, 1])
-
-        if is_existing:
-            # -------- EXISTING: UPDATE / DELETE --------
-            with btn_col1:
-                if st.button("UPDATE", use_container_width=True, type="primary", key=f"{key_prefix}btn_update"):
-                    if not package_out:
-                        st.warning("Set a route and both Start/End points before updating.")
-                    else:
-                        # Create progress placeholder lazily (so no empty space when idle)
-                        progress_placeholder = st.container().empty()
-                        _ = _deploy_to_agol(
-                            package_out,
-                            edit_type="updates",
-                            progress_placeholder=progress_placeholder,  # <- shows just under buttons
-                        )
-                        # Force-refresh from AGOL so label picks up updated Event_Name
-                        impact_area = st.session_state.get("impact_area")
-                        pulled = fetch_traffic_impacts(force=True)
-                        st.session_state["tie_events"] = []
-                        st.session_state["tie_next_id"] = 1
-                        for rec in (pulled or []):
-                            st.session_state["tie_events"].append(
-                                _event_from_record(rec, impact_area_default=impact_area)
-                            )
-                        st.rerun()
-
-            with btn_col2:
-                if st.button("DELETE", use_container_width=True, key=f"{key_prefix}btn_delete"):
-                    if not package_out:
-                        st.warning("A valid package from the selector is required to delete.")
-                    else:
-                        try:
-                            progress_placeholder = st.container().empty()
-                            delete_result = _deploy_to_agol(
-                                package_out,
-                                edit_type="deletes",
-                                progress_placeholder=progress_placeholder,  # <- shows just under buttons
-                            )
-                        except Exception as ex:
-                            st.error(f"Failed to delete on AGOL: {ex}")
-                            st.stop()
-
-                        ok_sections = [k for k, v in (delete_result or {}).items() if v.get("success")]
-                        fail_sections = [k for k, v in (delete_result or {}).items() if not v.get("success")]
-                        if fail_sections:
-                            st.warning(f"AGOL delete completed with partial failures: {', '.join(fail_sections)}")
-
-                        # Remove locally then rebuild from AGOL
-                        try:
-                            st.session_state["tie_events"].remove(ev)
-                        except ValueError:
-                            pass
-
-                        impact_area = st.session_state.get("impact_area")
-                        pulled = fetch_traffic_impacts(force=True)
-                        st.session_state["tie_events"] = []
-                        st.session_state["tie_next_id"] = 1
-                        for rec in (pulled or []):
-                            st.session_state["tie_events"].append(
-                                _event_from_record(rec, impact_area_default=impact_area)
-                            )
-                        st.rerun()
-        else:
-            # -------- NEW: LOAD / CLEAR --------
-            with btn_col1:
-                if st.button("LOAD", use_container_width=True, type="primary", key=f"{key_prefix}btn_load"):
-                    if not package_out:
-                        st.warning("Select a route and set both Start and End points before loading.")
-                    else:
-                        try:
-                            progress_placeholder = st.container().empty()
-                            add_result = _deploy_to_agol(
-                                package_out,
-                                edit_type="adds",
-                                progress_placeholder=progress_placeholder,  # <- shows just under buttons
-                            )
-                        except Exception as ex:
-                            st.error(f"Failed to add on AGOL: {ex}")
-                            st.stop()
-
-                        ok_sections = [k for k, v in (add_result or {}).items() if v.get("success")]
-                        fail_sections = [k for k, v in (add_result or {}).items() if not v.get("success")]
-                        if fail_sections:
-                            st.warning(f"AGOL add completed with partial failures: {', '.join(fail_sections)}")
-
-                        impact_area = st.session_state.get("impact_area")
-                        pulled = fetch_traffic_impacts(force=True)
-                        st.session_state["tie_events"] = []
-                        st.session_state["tie_next_id"] = 1
-                        for rec in (pulled or []):
-                            st.session_state["tie_events"].append(
-                                _event_from_record(rec, impact_area_default=impact_area)
-                            )
-                        st.rerun()
-
-            with btn_col2:
-                if st.button("CLEAR", use_container_width=True, key=f"{key_prefix}btn_clear"):
-                    _clear_tab_selection(key_prefix)
-                    ev["label"] = "New Event"
-                    ev["selected_impact_area"] = st.session_state.get("impact_area")
-                    st.rerun()
-
-    # ------------------------------------------------------------
-    # Segmented control in place of tabs
-    # ------------------------------------------------------------
-    if events:
-        # Build labels
-        labels = [
-            (ev["label"] if (isinstance(ev.get("label"), str) and ev["label"].strip()) else f"Event {i+1}")
-            for i, ev in enumerate(events)
-        ]
-
-        # Keep a stable, index-based selector so switching does not reconstruct all maps
-        st.session_state.setdefault("ti_event_selector", labels[0])
-
-        # If label list changed (e.g., after update/delete/add), clamp value
-        if st.session_state["ti_event_selector"] not in labels:
-            st.session_state["ti_event_selector"] = labels[0]
-
-        selection = st.segmented_control(
-            "Traffic Impact Events",
-            options=labels,
-            key="ti_event_selector",
-            width="stretch",
-            label_visibility="hidden"
-        )
-
-        with st.container(border=True):
-            # Render only the selected event in one container
-            idx = labels.index(selection)
-            _render_event_panel(events[idx], impact_area)
-    else:
-        if existing_records:
-            st.info("Existing Traffic Impact Events were found, but could not initialize tabs.")
-        else:
-            st.info("No existing Traffic Impact Events were found for this project.")
