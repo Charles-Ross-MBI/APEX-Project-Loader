@@ -58,8 +58,19 @@ Notes:
 import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
 import datetime
-from agol.agol_util import select_record, get_objectids_by_identifier
-from util.geospatial_util import center_of_geometry, create_buffers, slice_and_buffer_route
+from agol.agol_util import (
+    select_record, 
+    get_objectids_by_identifier
+)
+from util.geospatial_util import (
+    center_of_geometry, 
+    create_buffers, 
+    slice_and_buffer_route
+)
+
+from util.input_util import (
+    fmt_date
+)
 
 # =============================================================================
 # PAYLOAD CLEANING / NORMALIZATION HELPERS
@@ -791,7 +802,7 @@ def parent_traffic_impact_payload():
                 "Drafter": "Unassigned",
                 "Approver": "Unassigned",
                 "Alaska_511_Comm": "NIE",
-                "Log_Status": "No Submissions",
+                "Log_Status": "No Traffic Impacts",
                 "APEX_GUID": st.session_state.get("apex_globalid").strip("{}"),
                 "AWP_Proj_Name": st.session_state.get("awp_proj_name"),
                 "Proj_Name": st.session_state.get("proj_name"),
@@ -1173,45 +1184,91 @@ def manage_communities_payloads(package_out: dict, edit_type: str) -> dict:
 
 
 
-def awp_apex_cy_payload():
-    # Locate OBJECTID
-    object_id = get_objectids_by_identifier(
-        url=st.session_state['aashtoware_url'],
-        layer=0,
-        id_field="Id",
-        id_value=st.session_state.get("awp_guid")
+
+
+def manage_awp_connect_payload(package_out: dict, edit_type: str) -> dict:
+    pass
+
+
+
+
+def manage_information_payload(package_out: dict, edit_type: str) -> dict:
+    """
+    Build an AGOL applyEdits payload for the Project Information layer.
+
+    - Uses fmt_date on any date/datetime fields in the package (and on known date keys).
+    - Supports ONLY 'adds' and 'updates' (no deletes).
+    - Normalizes integer-like fields via str_to_int.
+    - Runs through clean_payload(..) before returning.
+    """
+    if not isinstance(package_out, dict):
+        raise ValueError("package_out must be a dict")
+
+    et = (edit_type or "").strip().lower()
+    if et not in ("adds", "updates"):
+        raise ValueError("manage_information supports only 'adds' or 'updates'")
+
+    # Copy source-of-truth attributes
+    attrs = dict(package_out)
+
+    # -----------------------------
+    # OBJECTID handling (updates)
+    # -----------------------------
+    if et == "updates":
+        oid = (
+            attrs.pop("objectid", None)
+            or attrs.pop("OBJECTID", None)
+            or attrs.pop("objectId", None)
+        )
+        if oid is None:
+            raise ValueError("UPDATE requires a valid OBJECTID")
+        attrs["OBJECTID"] = oid  # AGOL expects uppercase key
+
+    # ------------------------------------
+    # Date/time coercion using fmt_date
+    # ------------------------------------
+    # Known date field names from the UI/package
+    known_date_keys = {
+        "anticipated_start",
+        "anticipated_end",
+        "award_date",
+        "tenadd",
+    }
+
+    # 1) Apply fmt_date to all known date keys (string or datetime inputs)
+    for k in known_date_keys:
+        if k in attrs:
+            attrs[k] = fmt_date(attrs[k])  # -> "MM/DD/YYYY" or ""
+
+    # 2) Safety net: if any remaining value is a date/datetime object, fmt_date it
+    import datetime as _dt
+    for k, v in list(attrs.items()):
+        if isinstance(v, (_dt.date, _dt.datetime)):
+            attrs[k] = fmt_date(v)
+
+    # ------------------------------------
+    # Numeric coercions for currency/int fields
+    # ------------------------------------
+    numeric_int_keys = (
+        "awarded_amount",
+        "current_contract_amount",
+        "amount_paid_to_date",
+        "award_fiscal_year",
     )
-    # Read session values
-    cy_awp  = st.session_state.get("awp_selected_construction_years")
-    cy_year = st.session_state.get("construction_year")
+    for k in numeric_int_keys:
+        if k in attrs:
+            attrs[k] = str_to_int(attrs[k])
 
-    # --- Normalize existing AWP years into a list ---
-    if isinstance(cy_awp, str):
-        cy_list = [v.strip() for v in cy_awp.split(",") if v.strip()]
-    elif isinstance(cy_awp, list):
-        cy_list = list(cy_awp)
-    else:
-        cy_list = []
+    # -----------------------------
+    # Return applyEdits payload
+    # -----------------------------
+    if et == "updates":
+        payload = {"updates": [{"attributes": attrs}]}
+        return clean_payload(payload, "updates")
 
-    # --- Add the new selected year if it is not blank and not already included ---
-    if cy_year and cy_year not in cy_list:
-        cy_list.append(cy_year)
+    payload = {"adds": [{"attributes": attrs}]}
+    return clean_payload(payload, "adds")
 
-    # Back to comma–separated string
-    cy_list_str = ", ".join(cy_list)
 
-    # --- Build final payload ---
-    try:
-        payload = {
-            "updates": [
-                {
-                    "attributes": {
-                        "OBJECTID": object_id,
-                        "ConstructionYears": cy_list_str
-                    }
-                }
-            ]
-        }
-        return clean_payload(payload)
-    except Exception as e:
-        raise RuntimeError(f"Error building Construction Years payload: {e}")
+# Backwards-compatible alias if other modules call the older name
+manage_information = manage_information_payload
