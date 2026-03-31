@@ -89,7 +89,7 @@ def init_session_state():
         "apex_guid": None,
         "apex_awp_id": None,
         "apex_object_id": None,
-        "ti_guid": None
+        "ti_guid": None,
     }
 
     # Read query params (new + old API)
@@ -283,6 +283,10 @@ def init_session_state():
         "route_intersect": {
             "url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Roads_AKDOT/FeatureServer",
             "layer": 0
+        },
+        "mileposts_intersect": {
+            'url':"https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Mileposts_AKDOT/FeatureServer",
+            'layer': 0
         }
     }
 

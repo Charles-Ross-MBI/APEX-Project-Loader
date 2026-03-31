@@ -49,6 +49,7 @@ import streamlit as st
 import logging
 from shapely.geometry import LineString
 from shapely.ops import unary_union, linemerge
+from typing import Tuple, Optional, List, Dict, Any
 
 
 # =============================================================================
@@ -1992,7 +1993,7 @@ class AGOLRouteSegmentFinder:
 
 
 
-from typing import Tuple, Optional, List, Dict, Any
+
 
 def get_routes_within_distance(
     geometry: Any,
@@ -2136,3 +2137,105 @@ def get_routes_within_distance(
         if rid and geom:
             packaged.append({"route_id": rid, "route_name": rname, "geom": geom})
     return packaged
+
+
+
+def get_mileposts_for_route(
+    route_id: str,
+    *,
+    # Signature kept for compatibility, but values are resolved from session state as required.
+    service_url: Optional[str] = None,
+    layer: Optional[int] = None,
+    route_id_field: str = "Route_ID",
+    mp_label_field: str = "Milepost_Number",
+    mp_prefix: str = "",
+    mp_suffix: str = "",
+    _use_cache: bool = True
+) -> List[Dict]:
+    """
+    Return reference milepost points for the given Route ID.
+
+    Behavior:
+    - Resolves milepost service config from:
+        st.session_state['mileposts_intersect']['url']
+        st.session_state['mileposts_intersect']['layer']
+    - Queries by Route_ID using select_record(...) from this module.
+    - Expects point geometry (x/y) and Milepost_Number (integer).
+    - Packages each feature as:
+        { "lon": float, "lat": float, "label": str, "mp": str }
+      where 'label' is the stringified Milepost_Number (prefix/suffix optional).
+
+    Notes:
+    - Safe no-op on any error: returns [].
+    - Caches results in st.session_state to avoid repeat queries per route.
+    """
+    # --- Required inputs ---
+    if not isinstance(route_id, str) or not route_id.strip():
+        return []
+
+    # --- Resolve service config strictly from session state as requested ---
+    cfg = st.session_state.get("mileposts_intersect") or {}
+    service_url = cfg.get("url")
+    layer = cfg.get("layer")
+
+    if not isinstance(service_url, str) or not service_url or layer is None:
+        return []
+
+    # --- Cache guard (per-service, per-layer, per-route) ---
+    cache_key = f"__mileposts_cache::{service_url}::{layer}::{route_id}"
+    if _use_cache:
+        cached = st.session_state.get(cache_key)
+        if isinstance(cached, list):
+            return cached
+
+    # --- Query all milepost records by Route_ID, return geometry ---
+    try:
+        features = select_record(
+            url=service_url,
+            layer=int(layer),
+            id_field="Route_ID",          # enforced per your instruction
+            id_value=str(route_id).replace("'", "''"),
+            fields="Route_ID,Milepost_Number",
+            return_geometry=True,
+        ) or []
+    except Exception:
+        st.session_state[cache_key] = []
+        return []
+
+    # --- Package results for rendering in select_route_and_points ---
+    records: List[Dict] = []
+    for feat in features:
+        attrs = feat.get("attributes") or {}
+        geom = feat.get("geometry") or {}
+
+        x = geom.get("x")
+        y = geom.get("y")
+        if not isinstance(x, (int, float)) or not isinstance(y, (int, float)):
+            continue
+
+        mp_raw = attrs.get("Milepost_Number")
+        if mp_raw is None:
+            continue
+
+        # Ensure label is a string (Milepost_Number is stored as integer)
+        try:
+            label_core = str(int(mp_raw))
+        except Exception:
+            label_core = str(mp_raw)
+
+        label = f"{mp_prefix}{label_core}{mp_suffix}"
+
+        try:
+            records.append({
+                "lon": float(x),
+                "lat": float(y),
+                "label": label,          # used by the DivIcon renderer
+                "mp": label_core,        # raw-as-string; available as fallback
+            })
+        except Exception:
+            # Skip malformed points but keep others
+            continue
+
+    st.session_state[cache_key] = records
+    return records
+

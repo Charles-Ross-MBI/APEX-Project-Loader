@@ -93,7 +93,9 @@ from agol.agol_util import (
     get_multiple_fields,
     select_record,
     get_routes_within_distance, 
-    query_routes_within_buffer)
+    query_routes_within_buffer,
+    get_mileposts_for_route
+    )
 
 # Data Helpers Create Buffer
 from util.geospatial_util import (
@@ -1795,7 +1797,6 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
             for k in ("route_id", "route_name", "route_geom", "start_point", "end_point"):
                 if package.get(k) is not None:
                     ti_dict[k] = package.get(k)
-
             if package.get("route_id") is not None:
                 st.session_state[sel_id_key] = package.get("route_id")
             if package.get("route_name") is not None:
@@ -1839,8 +1840,21 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
             id_to_name[rid] = attrs.get("Route_Name")
             id_to_geom[rid] = geom
 
-    selected_id = st.session_state.get(sel_id_key)
-    selected_geom = st.session_state.get(sel_geom_key)
+    # ---------- RESOLVE selection robustly (supports is_existing) ----------
+    # Prefer explicit session keys, then TI dict, then incoming package
+    ti_dict_now = st.session_state.get(ti_key, {}) or {}
+    pkg_dict = package if isinstance(package, dict) else {}
+
+    selected_id = (
+        st.session_state.get(sel_id_key)
+        or ti_dict_now.get("route_id")
+        or pkg_dict.get("route_id")
+    )
+    selected_geom = (
+        st.session_state.get(sel_geom_key)
+        or ti_dict_now.get("route_geom")
+        or pkg_dict.get("route_geom")
+    )
 
     # =======================================================
     # Segmented Control (numbered; stable)
@@ -1890,7 +1904,6 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                 d = _line_distance_meters((click_lon, click_lat), geom)
                 if d < nearest_dist:
                     nearest_dist, nearest_id = d, rid
-
             if nearest_id and nearest_dist <= 100:
                 prev_id = st.session_state.get(sel_id_key)
                 if prev_id != nearest_id:
@@ -1913,7 +1926,6 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                         "route_geom": st.session_state[sel_geom_key],
                     }
                 )
-
                 if isinstance(package, dict):
                     package["route_id"] = st.session_state[ti_key]["route_id"]
                     package["route_name"] = st.session_state[ti_key]["route_name"]
@@ -1953,6 +1965,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
     # Map click for ENDPOINT SNAPPING
     # ---------------------------
     last_click = _get_last_click()
+    # Use the resolved selected_geom
     if last_click and selected_geom and place_mode in ("2. Set Start", "3. Set End"):
         try:
             metrics = _precompute_metrics(selected_geom)
@@ -1981,6 +1994,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
 
     # ─────────────────────────────────────────────────────────────
     # PROJECT GEOMETRY — render FIRST so it sits UNDER routes & markers
+    # (Wrap in a non-controllable FeatureGroup to keep it out of LayerControl)
     # ─────────────────────────────────────────────────────────────
     FOOTPRINT_COLOR = "#3388ff"
     FOOTPRINT_LINE_WEIGHT = 15
@@ -1988,6 +2002,12 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
     FOOTPRINT_POLY_WEIGHT = 4
     FOOTPRINT_POLY_FILL_OPACITY = 0.30
     FOOTPRINT_TOOLTIP = "PROJECT FOOTPRINT"
+
+    footprint_fg = folium.FeatureGroup(
+        name="(internal) Footprint",
+        show=True,
+        control=False
+    ).add_to(m)
 
     try:
         apex_geom_ctx = st.session_state.get("apex_geom") or {}
@@ -2013,7 +2033,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     opacity=FOOTPRINT_LINE_OPACITY,
                     tooltip=FOOTPRINT_TOOLTIP,
                     feature_type="line",
-                ).add_to(m)
+                ).add_to(footprint_fg)
         elif geom_type in ("boundary", "polygon", "area"):
             rings = apex_parts if apex_parts else (proj_area_fallback or [])
             if rings:
@@ -2025,7 +2045,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     fill_opacity=FOOTPRINT_POLY_FILL_OPACITY,
                     tooltip=FOOTPRINT_TOOLTIP,
                     feature_type="polygon",
-                ).add_to(m)
+                ).add_to(footprint_fg)
         elif geom_type in ("site", "point"):
             pts = [p for p in apex_parts if _is_pair(p)]
             if pts:
@@ -2034,7 +2054,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     feature_type="point",
                     icon=folium.Icon(color="blue"),
                     tooltip=FOOTPRINT_TOOLTIP,
-                ).add_to(m)
+                ).add_to(footprint_fg)
         else:
             # Smart fallback: use project area if present; else try lines; else points
             if proj_area_fallback:
@@ -2046,7 +2066,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     fill_opacity=FOOTPRINT_POLY_FILL_OPACITY,
                     tooltip=FOOTPRINT_TOOLTIP,
                     feature_type="polygon",
-                ).add_to(m)
+                ).add_to(footprint_fg)
             elif apex_parts:
                 if isinstance(apex_parts[0], (list, tuple)) and apex_parts and apex_parts[0] and isinstance(apex_parts[0][0], (list, tuple)):
                     geometry_to_folium(
@@ -2056,7 +2076,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                         opacity=FOOTPRINT_LINE_OPACITY,
                         tooltip=FOOTPRINT_TOOLTIP,
                         feature_type="line",
-                    ).add_to(m)
+                    ).add_to(footprint_fg)
                 else:
                     pts = [p for p in apex_parts if _is_pair(p)]
                     if pts:
@@ -2065,7 +2085,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                             feature_type="point",
                             icon=folium.Icon(color="blue"),
                             tooltip=FOOTPRINT_TOOLTIP,
-                        ).add_to(m)
+                        ).add_to(footprint_fg)
     except Exception:
         # Legacy keys fallback (also CAPITALIZED tooltip and corrected opacity=0.70)
         project_geom_display = st.session_state.get("project_geometry")
@@ -2077,7 +2097,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     feature_type="point",
                     icon=folium.Icon(color="blue"),
                     tooltip=FOOTPRINT_TOOLTIP
-                ).add_to(m)
+                ).add_to(footprint_fg)
             elif project_geom_type in ("line", "linestring"):
                 geometry_to_folium(
                     project_geom_display,
@@ -2086,7 +2106,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     weight=FOOTPRINT_LINE_WEIGHT,
                     opacity=FOOTPRINT_LINE_OPACITY,  # was 0.07 → now 0.70
                     tooltip=FOOTPRINT_TOOLTIP
-                ).add_to(m)
+                ).add_to(footprint_fg)
             elif project_geom_type in ("polygon",):
                 geometry_to_folium(
                     project_geom_display,
@@ -2097,7 +2117,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                     fill=True,
                     fill_opacity=FOOTPRINT_POLY_FILL_OPACITY,
                     tooltip=FOOTPRINT_TOOLTIP
-                ).add_to(m)
+                ).add_to(footprint_fg)
         elif project_geom_display:
             geometry_to_folium(
                 project_geom_display,
@@ -2106,7 +2126,7 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
                 weight=FOOTPRINT_LINE_WEIGHT,
                 opacity=FOOTPRINT_LINE_OPACITY,
                 tooltip=FOOTPRINT_TOOLTIP
-            ).add_to(m)
+            ).add_to(footprint_fg)
 
     # ---------------------------
     # Routes (when selecting) OR the selected route (other modes)
@@ -2119,7 +2139,6 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
             geom = r.get("geometry") or []
             if not rid or not geom:
                 continue
-
             feature = {
                 "type": "Feature",
                 "geometry": {"type": "LineString", "coordinates": geom},
@@ -2135,7 +2154,6 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
 
             # Keep strong red highlight on hover so gray routes light up
             highlight = lambda f: {"color": "#e53935", "weight": 6, "opacity": 1.0}
-
             folium.GeoJson(
                 data=feature,
                 style_function=lambda f, c=base_color, w=base_weight, o=base_opacity: _style_factory(c, w, o),
@@ -2145,17 +2163,57 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
             ).add_to(m)
     else:
         if selected_id and selected_geom:
-            geometry_to_folium(
-                selected_geom,
-                color="#e53935",
-                weight=6,
-                opacity=1.0,
-                tooltip=(
-                    f"ROUTE {fmt_string(selected_id)}: "
-                    f"{fmt_string(st.session_state.get(sel_name_key, '') or id_to_name.get(selected_id, ''))}"
-                ),
-                feature_type="line",
+            # Keep the selected route OUT of the LayerControl by drawing it inside a non-controllable FeatureGroup
+            route_fg = folium.FeatureGroup(
+                name="(internal) Selected Route",
+                show=True,
+                control=False
             ).add_to(m)
+            # Draw the selected route using PolyLine(s) (avoid anonymous GeoJson layers)
+            try:
+                # selected_geom can be:
+                # • list of [lon, lat] -> single path
+                # • dict with {"paths": [...]} -> one or more paths
+                if isinstance(selected_geom, dict) and isinstance(selected_geom.get("paths"), list):
+                    paths = selected_geom["paths"]
+                elif isinstance(selected_geom, list) and selected_geom and isinstance(selected_geom[0], (list, tuple)):
+                    paths = [selected_geom]  # wrap single path
+                else:
+                    paths = []
+                drew_any = False
+                for path in paths:
+                    if not path or not isinstance(path[0], (list, tuple)) or len(path[0]) != 2:
+                        continue
+                    latlon = [[p[1], p[0]] for p in path if isinstance(p, (list, tuple)) and len(p) == 2]
+                    if not latlon:
+                        continue
+                    folium.PolyLine(
+                        locations=latlon,
+                        color="#e53935",
+                        weight=6,
+                        opacity=1.0,
+                    ).add_to(route_fg)
+                    drew_any = True
+
+                # Fallback: if path parsing failed, try geometry_to_folium inside the same non-controllable group
+                if not drew_any:
+                    try:
+                        geometry_to_folium(
+                            selected_geom,
+                            color="#e53935",
+                            weight=6,
+                            opacity=1.0,
+                            tooltip=(
+                                f"ROUTE {fmt_string(selected_id)}: "
+                                f"{fmt_string(st.session_state.get(sel_name_key, '') or id_to_name.get(selected_id, ''))}"
+                            ),
+                            feature_type="line",
+                        ).add_to(route_fg)
+                    except Exception:
+                        pass
+            except Exception:
+                # As a last resort, do nothing (never break core flow)
+                pass
 
     # ---------------------------
     # Markers: Start/End points (always on top) — CAPITALIZED tooltips
@@ -2184,6 +2242,76 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
             icon=folium.Icon(color="red", icon="stop", prefix="fa"),
             tooltip="END"
         ).add_to(m)
+
+    # ─────────────────────────────────────────────────────────────
+    # MILEPOSTS (REFERENCE ONLY) — Start/End tabs with ANY route selected
+    # (Always create the layer + LayerControl on Start/End; populate if records exist)
+    # ─────────────────────────────────────────────────────────────
+    if place_mode in ("2. Set Start", "3. Set End") and selected_id and selected_geom:
+        try:
+            # Create a togglable overlay layer; default OFF in the layer control
+            mp_group = folium.FeatureGroup(name="Mileposts", show=False).add_to(m)
+
+            # Attempt to populate from service
+            mp_records = []
+            try:
+                mp_records = get_mileposts_for_route(str(selected_id)) or []
+            except Exception:
+                mp_records = []
+
+            # Optional developer/testing injection:
+            if not mp_records:
+                dev_key = f"{key_prefix}__mileposts_debug"
+                test = st.session_state.get(dev_key)
+                if isinstance(test, list):
+                    mp_records = test
+
+            # Render labels if any
+            for rec in mp_records or []:
+                lon = rec.get("lon") or rec.get("x")
+                lat = rec.get("lat") or rec.get("y")
+                lab = rec.get("label") or rec.get("mp") or rec.get("milepost") or rec.get("text")
+                if isinstance(lon, (int, float)) and isinstance(lat, (int, float)) and lab is not None:
+                    html = f"""
+                    <div style="
+                        pointer-events:none;
+                        display:inline-flex;
+                        align-items:center;
+                        justify-content:center;
+                        background:#ffffff;
+                        border:1px solid #000;
+                        border-radius:3px;
+                        padding:1px 4px;
+                        min-width:14px;
+                        max-width:40px;
+                        font-size:10px;
+                        font-weight:700;
+                        color:#000;
+                        line-height:1.1;
+                        white-space:nowrap;
+                        overflow:hidden;
+                        text-overflow:ellipsis;
+                    ">
+                        {lab}
+                    </div>
+                    """
+                    try:
+                        folium.Marker(
+                            location=[float(lat), float(lon)],
+                            icon=folium.DivIcon(
+                                html=html,
+                                icon_anchor=(0, 0),
+                            ),
+                            tooltip=None
+                        ).add_to(mp_group)
+                    except Exception:
+                        pass
+
+            # Always show the LayerControl on Start/End (even if the layer is empty)
+            folium.LayerControl(position="topright", collapsed=False).add_to(m)
+        except Exception:
+            # Never break core flow because of milepost overlay
+            pass
 
     # ---- FIT-BOUNDS ----
     # New priority:
@@ -2250,7 +2378,6 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
         south, north = min(s_lat, e_lat), max(s_lat, e_lat)
         west, east = min(s_lon, e_lon), max(s_lon, e_lon)
         bounds = [[south - PAD, west - PAD], [north + PAD, east + PAD]]
-
     # 2) Only Start or Only End
     elif _valid_point_obj(start_pt):
         lon, lat = start_pt["lonlat"]
@@ -2258,11 +2385,9 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
     elif _valid_point_obj(end_pt):
         lon, lat = end_pt["lonlat"]
         bounds = [[lat - PAD, lon - PAD], [lat + PAD, lon + PAD]]
-
     # 3) Selected Route
     elif selected_geom:
         bounds = _compute_bounds(selected_geom)
-
     # 4) Project Area (fallback)
     if not bounds:
         preferred_fit_geom = (
@@ -2318,23 +2443,20 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
 
             if parent_oid is not None:
                 package["objectid"] = parent_oid
-            for alt in ("OBJECTID", "objectId", "ti_objectid"):
-                package.pop(alt, None)
-
+                for alt in ("OBJECTID", "objectId", "ti_objectid"):
+                    package.pop(alt, None)
             if route_oid is not None:
                 package["route_objectid"] = route_oid
-            for alt in ("routeObjectId", "route_OBJECTID"):
-                package.pop(alt, None)
-
+                for alt in ("routeObjectId", "route_OBJECTID"):
+                    package.pop(alt, None)
             if start_oid is not None:
                 package["start_objectid"] = start_oid
-            for alt in ("startObjectId", "start_OBJECTID"):
-                package.pop(alt, None)
-
+                for alt in ("startObjectId", "start_OBJECTID"):
+                    package.pop(alt, None)
             if end_oid is not None:
                 package["end_objectid"] = end_oid
-            for alt in ("endObjectId", "end_OBJECTID"):
-                package.pop(alt, None)
+                for alt in ("endObjectId", "end_OBJECTID"):
+                    package.pop(alt, None)
 
         # --- NAME from route_name (existing only) ---
         rn = package.get("route_name")

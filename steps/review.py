@@ -24,7 +24,7 @@ def header_with_edit(title: str, target_step: int, *, help: str = None):
 ##### {title}
         """, unsafe_allow_html=True)
     with right:
-        is_clicked = st.button("✏️ EDIT", help=help, key=f"edit_{target_step}")
+        is_clicked = st.button("JUMP TO SECTION", help=help, key=f"edit_{target_step}")
         if is_clicked:
             goto_step(target_step)                         # ✅ ensure rerun + correct key
 
