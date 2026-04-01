@@ -1572,14 +1572,16 @@ def select_route_and_points(container, key_prefix: str = "", is_existing: bool =
     if not is_existing:
         st.markdown("###### ADD ROUTE'S TRAFFIC IMPACT WORK EXTENT", unsafe_allow_html=True)
         st.caption(
-            "Choose the route affected by the APEX project's traffic impact and specify the start and end points "
-            "for the impact. Once all values are set, you can Load it from the page controls."
+            "Create the work extent for a route’s traffic impact. First, select the impacted route, then place the "
+            "start and end points to define the extent of work along the route. Once the route and both points are set, "
+            "you can load the impacted route into the project using the page controls."
         )
     else:
         st.markdown("###### MANAGE ROUTE'S TRAFFIC IMPACT WORK EXTENT", unsafe_allow_html=True)
         st.caption(
-            "Review and modify the selected impacted route. After adjusting the route, start, and end "
-            "points, use the page controls to Update or Delete."
+            "Manage the work extent for an existing impacted route. Select the route and adjust the start and end "
+            "points to update the extent of work along the route. Once changes are made, use the page controls to "
+            "update or delete the impacted route from the project."
         )
 
     # ---------------------------
