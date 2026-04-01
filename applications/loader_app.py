@@ -11,6 +11,7 @@ def run_loader_app():
     from steps.review import review_information
     from steps.load_project import load_project_apex
     from steps.load_geometry import load_geometry_app
+    from agol.agol_util import get_assignee_submitter_list
 
 
     # Base overview map
@@ -140,8 +141,6 @@ def run_loader_app():
 
         review_information()
 
-        st.write("")
-        
 
 
     elif st.session_state.loader_step == 5:
@@ -153,7 +152,6 @@ def run_loader_app():
             "Once all steps succeed, your project will be stored in the APEX Database."
         )
 
-
         instructions("Upload Project")
 
         st.write("")
@@ -161,42 +159,47 @@ def run_loader_app():
 
         # Display Drop Down of Uploaders
         st.markdown("<h5>Submitter Name</h5>", unsafe_allow_html=True)
-        selected_name = st.selectbox("Submitted by:", st.session_state['uploaders'], index=0)
 
-        # If "Other" is chosen, show a text box to override 
-        if selected_name == "Other": 
-            custom_name = st.text_input("Please type your name:") 
-            
-            if custom_name.strip(): 
-                st.session_state['submitted_by'] = custom_name
+        uploaders = get_assignee_submitter_list()
+        selected_name = st.selectbox("Submitted by:", uploaders, index=0)
 
-        else: 
-            st.session_state['submitted_by'] = selected_name
+        # If "Other" is chosen, show a text box to override
+        if selected_name == "Other":
+            custom_name = st.text_input("Please type your name:")
 
+            if custom_name.strip():
+                st.session_state['submitted_by'] = custom_name.strip()
+
+        else:
+            # ✅ Strip org if present: "ORG – Name" → "Name"
+            if "–" in selected_name:
+                st.session_state['submitted_by'] = selected_name.split("–", 1)[1].strip()
+            else:
+                st.session_state['submitted_by'] = selected_name.strip()
 
         st.write("")
 
         # Upload Project Option Once Submitter Loaded
         st.markdown("<h5>Upload Project</h5>", unsafe_allow_html=True)
-        
+
         # ✅ Back + Upload buttons appear together BEFORE upload starts
-        col_back, col_gap, col_upload, _ = st.columns([1.5, 0.2, 3, 6])   # wider upload column
+        col_back, col_gap, col_upload, _ = st.columns([1.5, 0.2, 3, 6])
 
         if not st.session_state.get("upload_clicked", False):
 
-            # Back button (left)
+            # Back button
             with col_back:
                 st.button("⬅️ Back", on_click=prev_step, key="step6_back_btn")
 
-            # Upload button (right) — now inside the SAME row
-            if st.session_state['submitted_by']:
+            # Upload button
+            if st.session_state.get('submitted_by'):
                 with col_upload:
                     if st.button("UPLOAD TO APEX", type="primary", key="step6_upload_btn"):
                         st.session_state.upload_clicked = True
                         st.rerun()
 
         else:
-            # ✅ After upload starts → hide both buttons
+            # Hide buttons once upload starts
             with col_back:
                 st.empty()
             with col_upload:
@@ -204,9 +207,8 @@ def run_loader_app():
 
             # --- Upload Button Logic (unchanged) ---
             if st.session_state.get("upload_clicked", False):
-                
-                #Run Upload Process
                 load_project_apex()
+
 
 
 

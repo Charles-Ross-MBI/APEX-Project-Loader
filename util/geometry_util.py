@@ -1167,8 +1167,7 @@ def aashtoware_path(points, container):
         "and the route segment between them is displayed. Tabs show the snapped coordinates "
         "for each route. If the footprint appears incorrect or misaligned, verify the BOP and "
         "EOP values in the **AASHTOWare to APEX** table and update them in AASHTOWare if errors are found."
-    )
-
+        )
 
         # ─────────────────────────────────────────────────────────────────────
         # 0) Normalize incoming 'points' → flat list[dict]

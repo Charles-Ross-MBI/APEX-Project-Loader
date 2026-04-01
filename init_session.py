@@ -232,7 +232,8 @@ def init_session_state():
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_TRAFFIC_IMPACTS_LOADER/FeatureServer",
         "milepoints_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         "mileposts_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOTPF_Route_Data/FeatureServer",
-        'communities_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer"
+        'communities_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer",
+        'apex_contacts_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Traffic_Impact_Assignees/FeatureServer"
     }
 
     aashtoware_layers = {
@@ -261,6 +262,10 @@ def init_session_state():
         "senate_layer": 8,
         "house_layer": 9
         }
+    
+    assigness_layers = {
+        'apex_contacts_layer': 0
+    }
 
     # Geography intersect services (used by district_queries / geography payloads)
     geography_intersects = {
@@ -300,6 +305,8 @@ def init_session_state():
     for key, value in aashtoware_layers.items():
         st.session_state.setdefault(key, value)
     for key, value in geography_intersects.items():
+        st.session_state.setdefault(key, value)
+    for key, value in assigness_layers.items():
         st.session_state.setdefault(key, value)
 
     # -------------------------------------------------------------------------
@@ -376,28 +383,28 @@ def init_session_state():
                 v = "awp_" + v
             st.session_state["awp_fields"][key] = v
 
-    # ======================================================
-    # DATA UPLOADERS
-    # ======================================================
-    # Values for attribution / uploader selection UI.
-    uploaders = ["",
-        "Christopher Butrico",
-        "Riley Conley",
-        "Casey DunnGossin",
-        "Caitlin Frye",
-        "Jennifer Gross",
-        "Alexander Hutcherson",
-        "Karin McGillivray",
-        "Charles Ross",
-        "Andrew Tuell",
-        "Callan VanNuys",
-        "Malia Walters",
-        "Sara Wazir",
-        "Gretchen WeissBrooks",
-        "Hannah White",
-        "Lauren Winkler",
-        "Other"]
-    st.session_state['uploaders'] =uploaders
+    # # ======================================================
+    # # DATA UPLOADERS
+    # # ======================================================
+    # # Values for attribution / uploader selection UI.
+    # uploaders = ["",
+    #     "Christopher Butrico",
+    #     "Riley Conley",
+    #     "Casey DunnGossin",
+    #     "Caitlin Frye",
+    #     "Jennifer Gross",
+    #     "Alexander Hutcherson",
+    #     "Karin McGillivray",
+    #     "Charles Ross",
+    #     "Andrew Tuell",
+    #     "Callan VanNuys",
+    #     "Malia Walters",
+    #     "Sara Wazir",
+    #     "Gretchen WeissBrooks",
+    #     "Hannah White",
+    #     "Lauren Winkler",
+    #     "Other"]
+    # st.session_state['uploaders'] =uploaders
 
     
 # -----------------------------------------------------------------------------

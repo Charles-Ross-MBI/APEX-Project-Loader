@@ -316,16 +316,18 @@ def aashtoware_geometry(awp_contract_id):
 
     geom_sel = select_record(
         url=st.session_state['aashtoware_url'],
-        layer= st.session_state['awp_geometry_layer'],
-        id_field = "CONTRACT_Id",
+        layer=st.session_state['awp_geometry_layer'],
+        id_field="CONTRACT_Id",
         id_value=st.session_state['awp_id'],
-        fields = "*"
+        fields="*",
+        return_geometry=True
     )
 
     st.session_state['debug'] = geom_sel
 
     for feat in geom_sel or []:
         a = feat.get("attributes", {})
+        g = feat.get("geometry", {})
         ptype = a.get("TYPE")
 
         # Skip rows that don't have a TYPE
@@ -334,15 +336,14 @@ def aashtoware_geometry(awp_contract_id):
 
         points.append({
             "contract_id": a.get("CONTRACT_Id"),
-            'type': ptype,
-            "route_id": a.get('Route_Name'),
-            'route_name': a.get('Route_Description'),
-            "lat": a.get("DECIMALLATITUDE"),
-            "lon": a.get("DECIMALLONGITUDE"),
+            "type": ptype,
+            "route_id": a.get("Route_Name"),
+            "route_name": a.get("Route_Description"),
+            "lat": g.get("y"),
+            "lon": g.get("x"),
         })
 
     return points
-
     
 
 
@@ -2238,4 +2239,83 @@ def get_mileposts_for_route(
 
     st.session_state[cache_key] = records
     return records
+
+
+
+
+def get_assignee_submitter_list():
+    """
+    Retrieve assignees from AGOL and build a submitter list for the loader selectbox.
+
+    Data source:
+    - URL:    st.session_state["assignees_url"]
+    - Layer:  st.session_state["assignees_layer"]
+
+    Display format:
+    - "{Organization} – {Assignee Name}"
+
+    Returns:
+        list[str] suitable for st.selectbox
+    """
+
+    assignees_url = st.session_state.get("apex_contacts_url")
+    assignees_layer = st.session_state.get("apex_contacts_layer")
+
+    try:
+        records = get_multiple_fields(
+            url=assignees_url,
+            layer=assignees_layer,
+            fields=[
+                "Org",
+                "Assignee",
+                "Role"
+            ]
+        )
+    except Exception:
+        # Fail safe: still allow upload
+        return ["", "Other"]
+
+    submitters = []
+
+    for rec in records or []:
+        org = str(rec.get("Org", "")).strip()
+        name = str(rec.get("Assignee", "")).strip()
+        role = str(rec.get("Role", "")).strip()
+
+        if not name or not org:
+            continue
+
+        # ✅ NEW FILTER: Role must contain 'Loader'
+        if "LOADER" not in role.upper():
+            continue
+
+        org_upper = org.upper()
+
+        # ✅ FILTER: Only allow AK DOT&PF or MBI orgs
+        if "AK DOT&PF" not in org_upper and "MBI" not in org_upper:
+            continue
+
+        submitters.append(f"{org} – {name}")
+
+    # De-dupe
+    submitters = list(set(submitters))
+
+    # Sort: AK DOT&PF first, MBI second
+    def sort_key(value: str):
+        v = value.upper()
+        if "AK DOT&PF" in v:
+            return (0, v)
+        if "MBI" in v:
+            return (1, v)
+        return (2, v)
+
+    submitters = sorted(submitters, key=sort_key)
+
+    # Always allow override
+    submitters.append("Other")
+
+    # Blank first entry so no default selection
+    submitters.insert(0, "")
+
+    return submitters
 

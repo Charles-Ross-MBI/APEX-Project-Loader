@@ -4,27 +4,64 @@ import streamlit as st
 TAB_INSTRUCTIONS = {
     "Load Geometry": """
 ##### Step 1: Select Project Type
-Start by deciding whether your project is a **Site** or a **Route**.  
-This choice determines how your project will be represented in the system and which upload methods are available.
+Start by selecting how the project footprint will be represented on the map.  
+The available project types depend on the **source of the project data**.
 
-- **Site Projects:** Represented by a single point on the map.  
-  Examples include airports, harbors, or buildings not located on the Alaska DOT&PF road network.  
-  Choose **Site** if your project is tied to a fixed location and does not involve roadways or traffic impacts.
+- **Site Projects** *(AASHTOWare or User Input)*  
+  Represent projects tied to a specific location and displayed as a single point.  
+  Examples include airports, harbors, maintenance facilities, or localized work areas not spanning roadway segments.
 
-- **Route Projects:** Represented by a line along the road network.  
-  Examples include road construction, resurfacing, or maintenance projects on the Alaska DOT&PF road network.  
-  Choose **Route** if your project involves roadway segments and may affect traffic flow.
+- **Route Projects** *(AASHTOWare or User Input)*  
+  Represent projects occurring along the Alaska DOT&PF roadway network and displayed as a line.  
+  Examples include construction, resurfacing, safety improvements, or maintenance work affecting one or more roadway segments.
+
+- **Boundary Projects** *(User Input only)*  
+  Represent projects defined by one or more polygonal areas rather than points or routes.  
+  Boundary projects may consist of a single area or multiple areas combined together to form the project footprint.  
+  This option is **only available** when the project source is **User Input** and is not supported for AASHTOWare‑sourced projects.
+
+Your selection determines which source options and geometry tools will be available in the next step.
 
 ---
+##### Step 2: Load Project Footprint
+After selecting a project type, choose how the footprint will be created.  
+The available options depend on whether the project is **AASHTOWare‑sourced** or **User Input**.
 
-##### Step 2: Upload Data
-Once you select a project type, you will see options for uploading the corresponding geometry.  
-Different upload methods are available depending on whether you chose Site or Route:
+**AASHTOWare‑Sourced Projects**
 
-- **For Site Projects:** You may upload a shapefile, enter latitude/longitude coordinates, or select a point directly on the map.  
-- **For Route Projects:** You may upload a shapefile, enter milepost ranges, or draw the route directly on the map.  
+If your project is sourced from AASHTOWare and sufficient geometry exists, an **AASHTOWare** option will appear automatically.
 
-Pick the method that best matches the data you have available.
+- **Site Projects (AASHTOWare)**  
+  The application looks for **Midpoint** records stored in AASHTOWare.  
+  If sufficient midpoint data exists, the AASHTOWare tab will appear and allow you to generate a site footprint using those stored midpoints.
+
+- **Route Projects (AASHTOWare)**  
+  The application looks for matching **Begin (BOP)** and **End (EOP)** points that share the same **Route ID**.  
+  When sufficient data exists, the footprint is created by clipping the Alaska Route System between the begin and end points.  
+  Multiple route segments may be combined when multiple valid begin and end point pairs are present.
+
+If an AASHTOWare option does **not** appear, it means sufficient geometry is not available.  
+In this case, you may use one of the manual options below.
+
+**Manual Options (Available to All Projects When Needed)**
+
+- **Site Projects:**  
+  - Upload a shapefile  
+  - Enter latitude and longitude coordinates  
+  - Select a point directly on the map
+
+- **Route Projects:**  
+  - Upload a shapefile  
+  - Draw a route directly on the map
+
+**User Input Projects Only**
+
+- **Boundary Projects:**  
+  Boundary footprints must be created manually.  
+  - Upload a polygon shapefile  
+  - Draw one or more boundaries directly on the map
+
+Once a footprint is created, it will be displayed on the map for review before proceeding.
 
 ---
 
@@ -36,7 +73,7 @@ If something looks incorrect, adjust or re‑upload before proceeding.
 
 ---
 
-##### Step 4: Project Geographies
+##### Step 4: Project Footprints
 Once geometry is successfully loaded into the app, the system will automatically process and query against four Alaska State geography layers:  
 - **House Districts**  
 - **Senate Districts**  
@@ -105,57 +142,118 @@ When finished, continue to the next step in the workflow.
 """,
 
     "Review": """
-##### Step 1: Review Entered Information
-Carefully review all information entered in previous steps.  
-The review will display in the following order:
-- **Project Name**  
-- **Submitted Project Geometry**  
-- **Project Geographies**  
-- **Project Information**  
-- **Contacts**
+##### Step 1: Review Project Summary
+This page provides a complete summary of everything entered throughout the workflow.  
+Carefully review **all information** before proceeding, as this is your final opportunity to make changes prior to submission.
+
+At the top of the page, the **project name** is displayed, followed by a visual preview of the **project footprint** on the map.  
+Confirm that the footprint accurately represents the project location, route, or boundary and matches how the project should appear publicly.
 
 ---
+##### Step 2: Review Project Footprint
+The **Project Footprint** section displays your submitted geometry directly on the map:
 
-##### Step 2: Make Edits if Needed
-If any value needs to be changed, backtrack to the appropriate step and update the information.  
-Once updated, return to this tab to continue.
+- **Site Projects:** Shown as a point or clustered points  
+- **Route Projects:** Shown as one or more line segments  
+- **Boundary Projects:** Shown as a shaded polygon or multiple combined areas  
+
+Verify that the footprint is complete, correctly placed, and reflects the intended project extent.  
+If the footprint is incorrect, use the **JUMP TO SECTION** button to return to the geometry step and make corrections.
 
 ---
+##### Step 3: Review Project Information
+All project information is organized into expandable sections for easier review, including:
 
-##### Step 3: Finalize Review
-Ensure all information is correct and complete.  
-Once satisfied, you may proceed to the next page in the workflow.
+- Identification details  
+- Timeline and funding information  
+- Descriptions and narratives  
+- Contact information  
+- Project web links  
+- Automatically derived geographic districts and regions  
+
+Review each section carefully to ensure values are accurate, complete, and formatted appropriately for public display.
+
+If any information needs to be corrected, select the **JUMP TO SECTION** button within the header to return to the appropriate step and update the data.
+
+---
+##### Step 4: Make Edits if Needed
+You may return to any previous step at any time using the **JUMP TO SECTION** buttons.  
+After making changes, return to the Review tab to confirm the updates before proceeding.
+
+---
+##### Step 5: Continue to Final Step
+Once all information and the project footprint have been reviewed and confirmed, select **NEXT** to proceed to the final upload step.
 """,
 
     "Upload Project": """
-##### Step 1: Select Your Name
-Choose your name from the dropdown list.  
-If not listed, select **Other** and enter it in the text box.  
-This ensures the project is correctly attributed before upload.
+##### Step 1: Begin Upload Process
+Once all previous steps are complete and reviewed, click **UPLOAD TO APEX** to begin loading the project into the system.
+
+The upload process runs automatically and sequentially.  
+Each step will display a progress indicator and success or failure message as it completes.
 
 ---
+##### Step 2: Upload Core Project Record
+The application first uploads the **primary project record** to the APEX database.
 
-##### Step 2: Upload to APEX
-Click the **UPLOAD TO APEX** button to begin transferring your project data.  
-This will load all information into the **APEX Database**.
+This record establishes the project identity and must succeed before any additional data can be stored.  
+If this step fails, the upload process stops immediately and no additional data is uploaded.
 
----
-
-##### Step 3: Success Messages
-Each successful step in the upload process will display a **success message**.  
-This confirms that the data has been properly stored.
+A successful upload will display a confirmation message indicating the project was created.
 
 ---
+##### Step 3: Upload Project Footprint
+Next, the system uploads the **project footprint geometry** that was defined earlier in the workflow.
 
-##### Step 4: Failure Messages
-If any part of the upload fails, the program will display a list of what failed.  
-Review the errors, correct the issues, and try uploading again.
+Depending on the project type, this may include:
+- Site point geometry  
+- Route line geometry  
+- Boundary polygon geometry  
+- Multiple geometries if applicable  
+
+Each geometry is uploaded individually.  
+If any geometry fails to upload, the system records the error and reports the failure.
 
 ---
+##### Step 4: Upload Project Geographies
+After the footprint is uploaded, the application processes and uploads **derived geography records**, including:
+- DOT&PF Regions  
+- Boroughs or Census Areas  
+- House Districts  
+- Senate Districts  
 
-##### Step 5: Completion
-Once all steps succeed, your project will be fully stored in the APEX Database.  
-You may then select **Finish** to reset the app and add another project or close the application.
+These records are generated automatically based on the submitted footprint.  
+If any geography layer fails to load, the failure will be reported while allowing other layers to continue processing.
+
+---
+##### Step 5: Final Background Processing
+Once the main uploads are complete, the system performs additional background steps, including:
+- Updating the project location record  
+- Initializing Traffic Impact records if applicable  
+
+These steps run automatically and do not require user interaction.
+
+Errors encountered during these background steps are recorded and reported as part of the final upload summary.
+
+---
+##### Step 6: Review Upload Results
+If **any step fails**, the upload is marked as unsuccessful and a detailed list of failures is displayed.
+
+When possible, the system will attempt to **clean up any partially uploaded data** to prevent incomplete projects from remaining in the database.
+
+If **all steps succeed**, a success confirmation is displayed indicating the project was fully uploaded to APEX.
+
+---
+##### Step 7: Choose Next Action
+After a successful upload, select one of the following options:
+
+- **RETURN TO LOADER**  
+  Resets the application and returns you to the project loader to begin entering a new project.
+
+- **MANAGE PROJECT**  
+  Opens the newly uploaded project in the management interface for further editing or maintenance.
+
+Select the option that best matches your next task to complete the workflow.
 """,
 
     "Other Tab Example": """
