@@ -18,7 +18,7 @@ def goto_step(target_step: int):
 
 def header_with_edit(title: str, target_step: int, *, help: str = None):
     """Render a left-aligned section header with a right-aligned EDIT button."""
-    left, right = st.columns([1, 0.4])
+    left, right = st.columns([1, 0.5])
     with left:
         st.markdown(f"""
 ##### {title}
