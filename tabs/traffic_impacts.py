@@ -462,12 +462,12 @@ def manage_traffic_impacts():
     # ------------------------------------------------------------
     # Header (title + Add button in the same row)
     # ------------------------------------------------------------
-    title_text = "##### MANAGE ROUTES IMPACTED BY THE PROJECT'S TRAFFIC IMPACTS"
+    title_text = "##### MANAGE IMPACTED ROUTES"
     title_col, btn_col = st.columns([6, 2], vertical_alignment="center")
     with title_col:
         st.markdown(f"{title_text}\n")
     with btn_col:
-        if st.button("➕ **ADD IMPACTED ROUTE**", key="btn_add_event_header", use_container_width=True):
+        if st.button("➕ **ADD ROUTE**", key="btn_add_event_header", use_container_width=True):
             st.session_state["tie_events"].append(
                 _new_event(impact_area_default=st.session_state.get("impact_area"))
             )
