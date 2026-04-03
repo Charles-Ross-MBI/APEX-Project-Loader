@@ -355,7 +355,8 @@ def project_payload():
                         "List_Route_Name": st.session_state.get("route_names", None),
                         "Proj_Web": st.session_state.get("proj_web", None),
                         'Submitted_By': st.session_state.get('submitted_by', None),
-                        "Database_Status": "Review: Awaiting Review",
+                        "Database_Status": "Published",
+                        "Target_Applications": "Traffic Impacts, Dashboard, Infosheet",
                         "AWP_Contract_ID": st.session_state.get("awp_guid", None),
                         "AWP_Update": st.session_state.get("awp_update", None)
                     },
