@@ -808,7 +808,7 @@ def parent_traffic_impact_payload():
                 "APEX_GUID": st.session_state.get("apex_globalid").strip("{}"),
                 "AWP_Proj_Name": st.session_state.get("awp_proj_name"),
                 "Proj_Name": st.session_state.get("proj_name"),
-                "APEX_Database_Status": "Review: Awaiting Review",
+                "APEX_Database_Status": "Published",
             },
             "geometry": esri_polygon,
         }
