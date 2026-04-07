@@ -250,7 +250,7 @@ def project_payload():
             raise RuntimeError("No project geometries available in session.")
 
         # --- Create buffers (fixed distances by kind) ---
-        buffer = create_buffers(geometry_list=geoms, geom_type=geom_type, distance_m=.0001)
+        buffer = create_buffers(geometry_list=geoms, geom_type=geom_type, distance_m=.01)
     
         if not buffer:
             raise RuntimeError("Buffering produced no output (check geometry and distances).")
