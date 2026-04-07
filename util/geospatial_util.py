@@ -50,7 +50,6 @@ def create_buffers(
     Create buffers for points, lines, or polygons and return a
     unified polygon footprint consistent across geometry types.
     """
-
     if not geometry_list:
         raise ValueError("geometry_list must not be empty")
 
@@ -64,7 +63,7 @@ def create_buffers(
 
     # Normalize geometries
     shapely_geoms = []
-    gt = geom_type.lower()
+    gt = (geom_type or "").lower()
 
     for g in geometry_list:
         if isinstance(g, (ShapelyPoint, ShapelyLineString, ShapelyPolygon)):
@@ -72,46 +71,101 @@ def create_buffers(
         else:
             if gt == "point":
                 shp = ShapelyPoint(g)
+
             elif gt in ("line", "linestring"):
                 shp = ShapelyLineString(g)
+
             elif gt == "polygon":
-                shp = ShapelyPolygon(g)
+                # Accept either:
+                #   - a single ring: [[x,y], [x,y], ...]
+                #   - rings wrapper: [ [[x,y], ...] ]  (ESRI-like)
+                ring = g
+                if (
+                    isinstance(g, (list, tuple))
+                    and len(g) > 0
+                    and isinstance(g[0], (list, tuple))
+                    and len(g[0]) > 0
+                    and isinstance(g[0][0], (list, tuple))
+                ):
+                    ring = g[0]
+
+                shp = ShapelyPolygon(ring)
+
             else:
                 raise ValueError(f"Unsupported geometry type: {geom_type}")
+
+        # IMPORTANT: always append, including when input is already a Shapely geometry
         shapely_geoms.append(shp)
 
-    # Buffer each geometry independently
+    # Buffer each geometry independently (in projected CRS)
+    cap_map = {"round": 1, "flat": 2, "square": 3}
+    join_map = {"round": 1, "mitre": 2, "miter": 2, "bevel": 3}
+
+    if cap_style not in cap_map:
+        raise ValueError(f"Unsupported cap_style: {cap_style}")
+    if join_style not in join_map:
+        raise ValueError(f"Unsupported join_style: {join_style}")
+
     buffered = []
     for shp in shapely_geoms:
         projected = transform(to_projected, shp)
-        buffered.append(
-            projected.buffer(
-                distance_m,
-                resolution=resolution,
-                cap_style={"round": 1, "flat": 2, "square": 3}[cap_style],
-                join_style={"round": 1, "mitre": 2, "miter": 2, "bevel": 3}[join_style],
-            )
+        buf = projected.buffer(
+            distance_m,
+            resolution=resolution,
+            cap_style=cap_map[cap_style],
+            join_style=join_map[join_style],
         )
+        if not buf.is_empty:
+            buffered.append(buf)
 
-    # Dissolve buffers
+    if not buffered:
+        raise ValueError("Buffering produced no geometry (all buffers were empty)")
+
+    # Dissolve buffers (unified footprint)
     merged = unary_union(buffered)
-
-    # 🔑 NORMALIZE RESULT (points behave like lines/polygons)
-    if isinstance(merged, MultiPolygon):
-        # Collapse multipart into unified footprint
-        merged = unary_union(list(polygonize(merged.boundary)))
 
     # Reproject back to lon/lat
     merged = transform(to_geographic, merged)
 
-    # Extract exterior rings ONLY
-    polygons = (
-        merged.geoms if isinstance(merged, MultiPolygon) else [merged]
-    )
+    # Enforce validity AFTER reprojection
+    if merged.is_empty:
+        raise ValueError("Buffered geometry resulted in an empty shape after reprojection")
+
+    if not merged.is_valid:
+        # Standard Shapely fix for minor self-intersections, ring issues, etc.
+        merged = merged.buffer(0)
+
+    if merged.is_empty or not merged.is_valid:
+        raise ValueError("Buffered geometry is invalid after normalization/repair")
+
+    # Extract exterior rings ONLY (ESRI polygon rings)
+    polygons = []
+    if isinstance(merged, MultiPolygon):
+        polygons = list(merged.geoms)
+    elif isinstance(merged, ShapelyPolygon):
+        polygons = [merged]
+    else:
+        # Handle GeometryCollection or other polygonal containers defensively
+        if hasattr(merged, "geoms"):
+            polygons = [g for g in merged.geoms if isinstance(g, ShapelyPolygon)]
+
+    if not polygons:
+        raise ValueError(f"Buffered result is not polygonal (type={type(merged).__name__})")
 
     rings = []
     for poly in polygons:
-        rings.append([[x, y] for x, y in poly.exterior.coords])
+        if poly.is_empty:
+            continue
+
+        coords = list(poly.exterior.coords)
+        # ESRI ring must have at least 4 points (closed ring; first==last)
+        if len(coords) < 4:
+            continue
+
+        rings.append([[float(x), float(y)] for x, y in coords])
+
+    if not rings:
+        raise ValueError("No valid exterior rings could be extracted from buffered polygons")
 
     return rings
 
