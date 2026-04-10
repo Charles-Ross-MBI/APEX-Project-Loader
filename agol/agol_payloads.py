@@ -741,7 +741,7 @@ def parent_traffic_impact_payload():
         # Build a single valid feature combining attributes + geometry
         feature = {
             "attributes": {
-                "Event_Name": "Blank Event",
+                "Event_Name": "Blank Traffic Impact",
                 "DOT_PF_Proj_Phone_COMM": "NIE",
                 "Agency_Name_COMM": "NIE",
                 "Agency_Phone_COMM": "NIE",
@@ -757,7 +757,7 @@ def parent_traffic_impact_payload():
                 "Drafter": "Unassigned",
                 "Approver": "Unassigned",
                 "Alaska_511_Comm": "NIE",
-                "Log_Status": "Inactive",
+                "Log_Status": "Blank",
                 "Agency_Name":"DOT&PF",
                 "APEX_GUID": st.session_state.get("apex_globalid").strip("{}"),
                 "AWP_Proj_Name": st.session_state.get("awp_proj_name"),
