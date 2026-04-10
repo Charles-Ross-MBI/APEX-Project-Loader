@@ -46,6 +46,88 @@ def _get_project_record():
     return recs[0]["attributes"] if recs else None
 
 
+# -----------------------------------------------------------------------------
+# AWP value resolution
+# -----------------------------------------------------------------------------
+# _awp_value should ONLY use AASHTOWare-loaded (session) values when the user
+# explicitly triggered an AWP load via CONNECT/CHANGE. Otherwise, it should
+# display values from the AGOL project record.
+INFO_AWP_TRIGGER_KEY = "info_awp_trigger_active"
+
+# Fallback mapping (used when an external mapping is not provided in session_state)
+# Keys are the UI/state keys used throughout this file; values are the session_state
+# keys populated by _apply_awp_attrs_to_state().
+AWP_FIELDS_FALLBACK = {
+    # Project name/description
+    "awp_proj_name": "awp_proj_name",
+    "proj_name": "awp_proj_name",
+    "awp_proj_desc": "awp_proj_desc",
+    "proj_desc": "awp_proj_desc",
+
+    # Phase & IDs
+    "phase": "awp_phase",
+    "iris": "awp_iris",
+    "stip": "awp_stip",
+    "fed_proj_num": "awp_fed_proj_num",
+
+    # Funding & practice
+    "fund_type": "awp_fund_type",
+    "proj_prac": "awp_proj_prac",
+
+    # Dates
+    "anticipated_start": "awp_anticipated_start",
+    "anticipated_end": "awp_anticipated_end",
+    "award_date": "awp_award_date",
+    "award_fiscal_year": "awp_award_fiscal_year",
+    "tenadd": "awp_tenadd",
+
+    # Award information
+    "awarded_amount": "awp_awarded_amount",
+    "current_contract_amount": "awp_current_contract_amount",
+    "amount_paid_to_date": "awp_amount_paid_to_date",
+
+    # Contractor (raw attribute fallback; may be absent depending on AWP schema)
+    "contractor": "awp_contractor",
+
+    # Contact
+    "contact_name": "awp_contact_name",
+    "contact_email": "awp_contact_email",
+    "contact_phone": "awp_contact_phone",
+
+    # Web link
+    "proj_web": "awp_proj_web",
+}
+
+
+def _awp_value(state_key: str, project: dict, project_field: str):
+    """Resolve a displayed value for AWP-backed (read-only) widgets.
+
+    Rules:
+      - If the user is actively connecting/changing AASHTOWare (trigger active),
+        read values from the AWP-loaded session_state keys.
+      - Otherwise (normal page load / after UPDATE), display values from the
+        current AGOL project record.
+
+    This prevents blank/None displays when the page is loaded without an active
+    AWP selection in session_state.
+    """
+    project = project or {}
+
+    # Only use AWP (session) values when the user explicitly triggered the AWP flow.
+    if not st.session_state.get(INFO_AWP_TRIGGER_KEY, False):
+        return project.get(project_field)
+
+    # If an external mapping is provided elsewhere in the app, honor it.
+    awp_fields = st.session_state.get("awp_fields")
+    if isinstance(awp_fields, dict):
+        mapped_key = awp_fields.get(state_key, state_key)
+    else:
+        mapped_key = AWP_FIELDS_FALLBACK.get(state_key, state_key)
+
+    # Use AWP-loaded value; if it doesn't exist, fall back to the project record.
+    return st.session_state.get(mapped_key, project.get(project_field))
+
+
 def _resolve_is_awp(project_attrs: dict) -> bool:
     """
     Match details_form logic: prefer the active source selection from session,
@@ -55,6 +137,28 @@ def _resolve_is_awp(project_attrs: dict) -> bool:
     if details_type in ("AASHTOWare Database", "User Input"):
         return details_type == "AASHTOWare Database"
     return bool(project_attrs.get("AWP_Contract_ID"))
+
+
+def _current_awp_contract_id(project: dict):
+    """
+    Contract ID should reflect the *currently selected* AASHTOWare project while
+    the connect/change flow is active, otherwise reflect the AGOL project record.
+    """
+    project = project or {}
+
+    # After UPDATE (normal page load), always show the record value so it reflects
+    # the latest saved project state.
+    if not st.session_state.get(INFO_AWP_TRIGGER_KEY, False):
+        return project.get("AWP_Contract_ID") or ""
+
+    # During connect/change flow, prefer the current selector/session values.
+    return (
+        st.session_state.get("apex_awp_id")
+        or st.session_state.get("awp_id")
+        or st.session_state.get("awp_guid")
+        or st.session_state.get("aashto_id")
+        or project
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -97,43 +201,82 @@ def _seed_select_default(key: str, project: dict, project_field: str, options_ke
 # -----------------------------------------------------------------------------
 # Build package for Update
 # -----------------------------------------------------------------------------
-def _build_information_package() -> dict:
+def _build_information_package(is_awp) -> dict:
     """
     Build a package of the current values from the
     PROJECT INFORMATION step.
     """
-    return {
-        # 1. Project Name
-        "proj_name": st.session_state.get("proj_name"),
-        # 2. Construction Year, Phase, & IDs
-        "construction_year": st.session_state.get("construction_year"),
-        "phase": st.session_state.get("phase"),
-        "iris": st.session_state.get("iris"),
-        "stip": st.session_state.get("stip"),
-        "fed_proj_num": st.session_state.get("fed_proj_num"),
-        # 3. Funding Type & Practice
-        "fund_type": st.session_state.get("fund_type"),
-        "proj_prac": st.session_state.get("proj_prac"),
-        # 4. Start & End Date
-        "anticipated_start": st.session_state.get("anticipated_start"),
-        "anticipated_end": st.session_state.get("anticipated_end"),
-        # 5. Award Information
-        "award_date": st.session_state.get("award_date"),
-        "award_fiscal_year": st.session_state.get("award_fiscal_year"),
-        "contractor": st.session_state.get("contractor"),
-        "awarded_amount": st.session_state.get("awarded_amount"),
-        "current_contract_amount": st.session_state.get("current_contract_amount"),
-        "amount_paid_to_date": st.session_state.get("amount_paid_to_date"),
-        "tenadd": st.session_state.get("tenadd"),
-        # 6. Description
-        "proj_desc": st.session_state.get("proj_desc"),
-        # 7. Contact
-        "contact_name": st.session_state.get("contact_name"),
-        "contact_email": st.session_state.get("contact_email"),
-        "contact_phone": st.session_state.get("contact_phone"),
-        # 8. Web Link
-        "proj_web": st.session_state.get("proj_web"),
-    }
+    if is_awp == True:
+        return {
+            # 1. Project Name
+            "awp_proj_name": st.session_state.get("awp_proj_name"),
+            "proj_name": st.session_state.get("proj_name"),
+            # 2. Construction Year, Phase, & IDs
+            "construction_year": st.session_state.get("construction_year"),
+            "phase": st.session_state.get("phase"),
+            "iris": st.session_state.get("iris"),
+            "stip": st.session_state.get("stip"),
+            "fed_proj_num": st.session_state.get("fed_proj_num"),
+            # 3. Funding Type & Practice
+            "fund_type": st.session_state.get("fund_type"),
+            "proj_prac": st.session_state.get("proj_prac"),
+            # 4. Start & End Date
+            "anticipated_start": st.session_state.get("anticipated_start"),
+            "anticipated_end": st.session_state.get("anticipated_end"),
+            # 5. Award Information
+            "award_date": st.session_state.get("award_date"),
+            "award_fiscal_year": st.session_state.get("award_fiscal_year"),
+            "contractor": st.session_state.get("contractor"),
+            "awarded_amount": st.session_state.get("awarded_amount"),
+            "current_contract_amount": st.session_state.get("current_contract_amount"),
+            "amount_paid_to_date": st.session_state.get("amount_paid_to_date"),
+            "tenadd": st.session_state.get("tenadd"),
+            # 6. Description
+            "awp_proj_desc": st.session_state.get("awp_proj_desc"),
+            "proj_desc": st.session_state.get("proj_desc"),
+            # 7. Contact
+            "contact_name": st.session_state.get("contact_name"),
+            "contact_email": st.session_state.get("contact_email"),
+            "contact_phone": st.session_state.get("contact_phone"),
+            # 8. Web Link
+            "proj_web": st.session_state.get("proj_web"),
+            #9. AWP ID
+            "awp_contract_id": st.session_state.get("awp_id")
+        }
+
+    elif is_awp == False:
+        return {
+            # 1. Project Name
+            "proj_name": st.session_state.get("proj_name"),
+            # 2. Construction Year, Phase, & IDs
+            "construction_year": st.session_state.get("construction_year"),
+            "phase": st.session_state.get("phase"),
+            "iris": st.session_state.get("iris"),
+            "stip": st.session_state.get("stip"),
+            "fed_proj_num": st.session_state.get("fed_proj_num"),
+            # 3. Funding Type & Practice
+            "fund_type": st.session_state.get("fund_type"),
+            "proj_prac": st.session_state.get("proj_prac"),
+            # 4. Start & End Date
+            "anticipated_start": st.session_state.get("anticipated_start"),
+            "anticipated_end": st.session_state.get("anticipated_end"),
+            # 5. Award Information
+            "award_date": st.session_state.get("award_date"),
+            "award_fiscal_year": st.session_state.get("award_fiscal_year"),
+            "contractor": st.session_state.get("contractor"),
+            "awarded_amount": st.session_state.get("awarded_amount"),
+            "current_contract_amount": st.session_state.get("current_contract_amount"),
+            "amount_paid_to_date": st.session_state.get("amount_paid_to_date"),
+            "tenadd": st.session_state.get("tenadd"),
+            # 6. Description
+            "proj_desc": st.session_state.get("proj_desc"),
+            # 7. Contact
+            "contact_name": st.session_state.get("contact_name"),
+            "contact_email": st.session_state.get("contact_email"),
+            "contact_phone": st.session_state.get("contact_phone"),
+            # 8. Web Link
+            "proj_web": st.session_state.get("proj_web"),
+        }
 
 
 # -----------------------------------------------------------------------------
@@ -142,11 +285,22 @@ def _build_information_package() -> dict:
 def _show_awp_selector():
     """
     Flip session flags so the source summary is hidden and the AWP selector shows.
-    The actual dropdown is rendered in manage_information().
+    Prevent auto-reloading the currently active selection when reopening the dropdown.
     """
     st.session_state["info_show_awp_selector"] = True
-    # Reset last loaded tracker for this view so we can detect a fresh selection
-    st.session_state["info_last_awp_loaded"] = None
+
+    # Current/active AWP Id (the one already applied)
+    active_id = (
+        st.session_state.get("info_awp_active_id")
+        or st.session_state.get("apex_awp_id")
+        or st.session_state.get("awp_id")
+        or st.session_state.get("awp_guid")
+        or st.session_state.get("aashto_id")
+        or None
+    )
+
+    # ✅ Do NOT reset to None; set to the active id so the loader won't re-fire immediately
+    st.session_state["info_last_awp_loaded"] = active_id
 
 
 def _seed_awp_default_from_project(project: dict):
@@ -214,9 +368,16 @@ def _load_awp_by_contract_id_and_switch():
         st.session_state.get("apex_awp_id")
         or st.session_state.get("awp_guid")
         or st.session_state.get("aashto_id")
+        or st.session_state.get('awp_id')
         or None
     )
     if not selected_id:
+        return
+    
+    
+    active_id = st.session_state.get("info_awp_active_id")
+    # ✅ If user is just reopening the selector and hasn't changed the selection, do nothing
+    if st.session_state.get("info_show_awp_selector") and active_id and selected_id == active_id:
         return
 
     # Avoid duplicate loads within the same selection
@@ -240,6 +401,13 @@ def _load_awp_by_contract_id_and_switch():
     )
     if recs and "attributes" in recs[0]:
         attrs = recs[0]["attributes"]
+        
+        st.session_state["apex_awp_id"] = selected_id
+        st.session_state["awp_id"] = selected_id
+        st.session_state["awp_guid"] = selected_id
+        st.session_state["aashto_id"] = selected_id
+        st.session_state["info_awp_active_id"] = selected_id
+
         _apply_awp_attrs_to_state(attrs)
 
         # Flip the form below into AWP mode; this mirrors details_form behavior
@@ -250,14 +418,27 @@ def _load_awp_by_contract_id_and_switch():
         # Mark what we just loaded so we don't re-query unnecessarily
         st.session_state["info_last_awp_loaded"] = selected_id
 
+        # Store the loaded AWP attrs for reference/debug (optional)
+        st.session_state["info_awp_attrs"] = attrs
+
+        # Hide the selector and return to the normal summary view
+        st.session_state["info_show_awp_selector"] = False
+
+        # ✅ Bump version so the Project Information section is rebuilt as a new form instance
+        st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
+
+        # Force a rerun to immediately render the updated AWP-backed form
+        st.rerun()
+
+
 
 # -----------------------------------------------------------------------------
 # Placeholder action handlers wired to buttons
 # (now updated to show the AWP picker and seed defaults)
 # -----------------------------------------------------------------------------
-def _on_update_aashtoware_information():
+def _on_update_aashtoware_information(is_awp):
     """Placeholder action for 'UPDATE AASHTOWARE INFORMATION' button."""
-    package = _build_information_package()
+    package = _build_information_package(is_awp)
     # Include OBJECTID for updates when available
     if "apex_object_id" in st.session_state:
         package["objectid"] = st.session_state.apex_object_id
@@ -278,9 +459,16 @@ def _on_update_aashtoware_information():
         # If Streamlit already cleared/invalidated the placeholder on rerun, ignore
         pass
 
+    # After a successful AGOL update, revert back to project-record display mode
+    if isinstance(result, dict) and result.get("success") is True:
+        st.session_state[INFO_AWP_TRIGGER_KEY] = False
+
 
 def _on_change_aashtoware_connection():
     """Action for 'CHANGE AASHTOWARE CONNECTION' button."""
+    # Trigger AWP value usage ONLY for this connect/change flow
+    st.session_state[INFO_AWP_TRIGGER_KEY] = True
+
     project = _get_project_record() or {}
     _show_awp_selector()
     _seed_awp_default_from_project(project)
@@ -288,17 +476,59 @@ def _on_change_aashtoware_connection():
 
 def _on_connect_to_aashtoware_project():
     """Action for 'CONNECT TO AASHTOWARE PROJECT' button."""
+    # Trigger AWP value usage ONLY for this connect/change flow
+    st.session_state[INFO_AWP_TRIGGER_KEY] = True
+
     project = _get_project_record() or {}
     _show_awp_selector()
     _seed_awp_default_from_project(project)
 
 
-def _on_update_information():
+def _reset_information_form_state_after_update():
+    """
+    Reset Information-tab state so the next script run behaves like a first load.
+    NOTE: Do NOT call st.rerun() here (callbacks already trigger rerun).
+    """
+    # Return to normal (project-record) display mode
+    st.session_state[INFO_AWP_TRIGGER_KEY] = False
+
+    # Hide the AWP selector (this is what makes it look like CONNECT was pressed)
+    st.session_state["info_show_awp_selector"] = False
+
+    # Remove mode overrides so _resolve_is_awp() falls back to AGOL record logic
+    for k in ("details_type", "info_option", "is_awp"):
+        if k in st.session_state:
+            del st.session_state[k]
+
+    # Clear widget-backed field values so defaults will be re-seeded from the AGOL record
+    field_keys = [
+        "proj_name", "proj_desc",
+        "construction_year", "phase", "iris", "stip", "fed_proj_num",
+        "fund_type", "proj_prac",
+        "anticipated_start", "anticipated_end",
+        "award_date", "award_fiscal_year",
+        "contractor", "awarded_amount", "current_contract_amount", "amount_paid_to_date", "tenadd",
+        "contact_name", "contact_email", "contact_phone",
+        "proj_web",
+    ]
+    for k in field_keys:
+        if k in st.session_state:
+            del st.session_state[k]
+
+    for k in ("id_source", "info_last_updated", "info_source"):
+        if k in st.session_state:
+            del st.session_state[k]
+
+    # Bump version so widget keys regenerate (forces a clean rebuild)
+    st.session_state["form_version"] = int(st.session_state.get("form_version", 0)) + 1
+
+
+def _on_update_information(is_awp):
     """
     Action for 'UPDATE INFORMATION' button.
     Shows progress during AGOL deployment and clears it on completion.
     """
-    package = _build_information_package()
+    package = _build_information_package(is_awp)
     # Include OBJECTID for updates when available
     if "apex_object_id" in st.session_state:
         package["objectid"] = st.session_state.apex_object_id
@@ -318,6 +548,13 @@ def _on_update_information():
     except Exception:
         # If Streamlit already cleared/invalidated the placeholder on rerun, ignore
         pass
+
+    # ✅ After a successful AGOL update, revert back to project-record display mode
+    # and rerun the app so the tab reloads from the updated record.
+    if isinstance(result, dict) and result.get("success") is True:
+        _reset_information_form_state_after_update()
+
+    
 
 
 def deploy_to_agol_information(
@@ -378,6 +615,8 @@ def deploy_to_agol_information(
 # MAIN ENTRYPOINT
 # -----------------------------------------------------------------------------
 def manage_information():
+    # Default: show AGOL project record values unless AWP connect/change is active
+    st.session_state.setdefault(INFO_AWP_TRIGGER_KEY, False)
     st.markdown("##### MANAGE PROJECT INFORMATION")
     st.caption(
         "View or update project information. "
@@ -472,8 +711,9 @@ def manage_information():
                     ro_widget(
                         "id_source",
                         "Contract ID",
-                        project.get("AWP_Contract_ID"),
+                        _current_awp_contract_id(project),
                     )
+
                 with c3:
                     ro_widget(
                         "info_last_updated",
@@ -531,13 +771,13 @@ def manage_information():
                 ro_widget(
                     "awp_proj_name",
                     "AASHTOWare Project Name",
-                    fmt_string(project.get("AWP_Proj_Name")),
+                    fmt_string(_awp_value("awp_proj_name", project, "AWP_Proj_Name"))
                 )
             with c2:
                 ro_widget(
                     "proj_name",
                     "Public Project Name",
-                    fmt_string(project.get("Proj_Name")),
+                    fmt_string(_awp_value("proj_name", project, "Proj_Name"))
                 )
         else:
             st.session_state["proj_name"] = st.text_input(
@@ -576,7 +816,10 @@ def manage_information():
         # Phase
         with col2:
             if is_awp:
-                ro_widget("phase", "Phase", fmt_string(project.get("Phase")))
+                ro_widget("phase", 
+                          "Phase", 
+                          fmt_string(_awp_value("phase", project, "Phase"))
+                )
             else:
                 st.session_state["phase"] = session_selectbox(
                     key="phase",
@@ -590,7 +833,10 @@ def manage_information():
         # IRIS
         with col3:
             if is_awp:
-                ro_widget("iris", "IRIS", fmt_string(project.get("IRIS")))
+                ro_widget("iris", 
+                          "IRIS", 
+                          fmt_string(_awp_value("iris", project, "IRIS"))
+                    )
             else:
                 st.session_state["iris"] = st.text_input(
                     label="IRIS",
@@ -600,7 +846,10 @@ def manage_information():
         # STIP
         with col4:
             if is_awp:
-                ro_widget("stip", "STIP", fmt_string(project.get("STIP")))
+                ro_widget("stip", 
+                          "STIP", 
+                          fmt_string(_awp_value("stip", project, "STIP"))
+                )
             else:
                 st.session_state["stip"] = st.text_input(
                     label="STIP",
@@ -610,7 +859,10 @@ def manage_information():
         # Federal Project Number
         with col5:
             if is_awp:
-                ro_widget("fed_proj_num", "Federal Project Number", fmt_string(project.get("Fed_Proj_Num")))
+                ro_widget("fed_proj_num", 
+                          "Federal Project Number", 
+                          fmt_string(_awp_value("fed_proj_num", project, "Fed_Proj_Num"))
+                    )
             else:
                 st.session_state["fed_proj_num"] = st.text_input(
                     label="Federal Project Number",
@@ -628,9 +880,15 @@ def manage_information():
         col13, col14 = st.columns(2)
         if is_awp:
             with col13:
-                ro_widget("fund_type", "Funding Type", fmt_string(project.get("Fund_Type")))
+                ro_widget("fund_type", 
+                          "Funding Type", 
+                          fmt_string(_awp_value("fund_type", project, "Fund_Type"))
+                        )
             with col14:
-                ro_widget("proj_prac", "Project Practice", fmt_string(project.get("Proj_Prac")))
+                ro_widget("proj_prac", 
+                          "Project Practice", 
+                          fmt_string(_awp_value("proj_prac", project, "Proj_Prac"))
+                        )
         else:
             with col13:
                 st.session_state["fund_type"] = session_selectbox(
@@ -659,9 +917,15 @@ def manage_information():
         col10, col11 = st.columns(2)
         if is_awp:
             with col10:
-                ro_widget("anticipated_start", "Anticipated Start", fmt_date(project.get("Anticipated_Start")))
+                ro_widget("anticipated_start", 
+                          "Anticipated Start", 
+                          fmt_date(_awp_value("anticipated_start", project, "Anticipated_Start"))
+                        )
             with col11:
-                ro_widget("anticipated_end", "Anticipated End", fmt_date(project.get("Anticipated_End")))
+                ro_widget("anticipated_end", 
+                          "Anticipated End", 
+                          fmt_date(_awp_value("anticipated_end", project, "Anticipated_End"))
+                        )
         else:
             with col10:
                 st.session_state["anticipated_start"] = st.date_input(
@@ -694,30 +958,46 @@ def manage_information():
         if is_awp:
             col12, col13 = st.columns(2)
             with col12:
-                ro_widget("award_date", "Award Date", fmt_agol_date(project.get("Award_Date")))
+                ro_widget("award_date", 
+                          "Award Date", 
+                          fmt_agol_date(_awp_value("award_date", project, "Award_Date"))
+                        )
             with col13:
                 ro_widget(
                     "award_fiscal_year",
                     "Awarded Fiscal Year",
-                    fmt_int(project.get("Award_Fiscal_Year"), year=True),
-                )
-            ro_widget("contractor", "Awarded Contractor", fmt_string(project.get("Contractor")))
+                    fmt_int(_awp_value("award_fiscal_year", project, "Award_Fiscal_Year"), year=True)
+                    )
+
+            ro_widget("contractor", 
+                      "Awarded Contractor", 
+                      fmt_string( _awp_value("contractor", project, "Contractor"))
+                    )
+            
             col15, col16, col17 = st.columns(3)
             with col15:
-                ro_widget("awarded_amount", "Awarded Amount", fmt_currency(project.get("Awarded_Amount")))
+                ro_widget("awarded_amount", 
+                          "Awarded Amount", 
+                          fmt_currency(_awp_value("awarded_amount", project, "Awarded_Amount"))
+                        )
             with col16:
                 ro_widget(
                     "current_contract_amount",
                     "Current Contract Amount",
-                    fmt_currency(project.get("Current_Contract_Amount")),
+                    fmt_currency(_awp_value("current_contract_amount", project, "Current_Contract_Amount")),
                 )
             with col17:
                 ro_widget(
                     "amount_paid_to_date",
                     "Amount Paid to Date",
-                    fmt_currency(project.get("Amount_Paid_To_Date")),
+                    fmt_currency(_awp_value("amount_paid_to_date", project, "Amount_Paid_To_Date"))
                 )
-            ro_widget("tenadd", "Tentative Advertise Date", fmt_date(project.get("TenAdd")))
+
+            ro_widget("tenadd", 
+                      "Tentative Advertise Date", 
+                      fmt_date(_awp_value("tenadd", project, "TenAdd"))
+                    )
+            
         else:
             col12, col13 = st.columns(2)
             with col12:
@@ -802,13 +1082,13 @@ def manage_information():
             ro_widget(
                 "awp_proj_desc",
                 "AASHTOWare Description",
-                fmt_string(project.get("AWP_Proj_Desc")),
+                fmt_string(_awp_value("awp_proj_desc", project, "AWP_Proj_Desc")),
                 textarea=True,
             )
             ro_widget(
                 "proj_desc",
                 "Public Description",
-                fmt_string(project.get("Proj_Desc")),
+                fmt_string(_awp_value("proj_desc", project, "Proj_Desc")),
                 textarea=True,
             )
         else:
@@ -828,12 +1108,21 @@ def manage_information():
         # ---------------------------------------------------------------------
         st.markdown("<h6>7. CONTACT</h6>", unsafe_allow_html=True)
         if is_awp:
-            ro_widget("contact_name", "Contact", fmt_string(project.get("Contact_Name")))
+            ro_widget("contact_name", 
+                      "Contact", 
+                      fmt_string(_awp_value("contact_name", project, "Contact_Name"))
+                    )
             col18, col19 = st.columns(2)
             with col18:
-                ro_widget("contact_email", "Email", fmt_string(project.get("Contact_Email")))
+                ro_widget("contact_email", 
+                          "Email", 
+                          fmt_string(_awp_value("contact_email", project, "Contact_Email"))
+                        )
             with col19:
-                ro_widget("contact_phone", "Phone", fmt_string(project.get("Contact_Phone")))
+                ro_widget("contact_phone", 
+                          "Phone", 
+                          fmt_string(_awp_value("contact_phone", project, "Contact_Phone"))
+                        )
         else:
             st.session_state["contact_name"] = st.text_input(
                 label="Name",
@@ -862,7 +1151,10 @@ def manage_information():
         # ---------------------------------------------------------------------
         st.markdown("<h6>8. WEB LINK</h6>", unsafe_allow_html=True)
         if is_awp:
-            ro_widget("proj_web", "Project Website", fmt_string(project.get("Proj_Web")))
+            ro_widget("proj_web",
+                      "Project Website", 
+                      fmt_string(_awp_value("proj_web", project, "Proj_Web"))
+                    )
         else:
             st.session_state["proj_web"] = st.text_input(
                 label="Project Website",
@@ -877,7 +1169,7 @@ def manage_information():
             "UPDATE INFORMATION",
             type='primary',
             use_container_width=True,
-            on_click=_on_update_information,
+            on_click=lambda: _on_update_information(is_awp),
         )
 
         # --- Progress bar placeholder ---

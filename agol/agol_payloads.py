@@ -1224,5 +1224,72 @@ def manage_information_payload(package_out: dict, edit_type: str) -> dict:
     return clean_payload(payload, "adds")
 
 
-# Backwards-compatible alias if other modules call the older name
-manage_information = manage_information_payload
+
+
+
+
+def manage_deployment_payload(package_out: dict, edit_type: str) -> dict:
+    """
+    Build an AGOL applyEdits payload for the Project Deployment layer.
+
+    - Supports ONLY 'adds' and 'updates' (no deletes).
+    - Normalizes OBJECTID handling for updates.
+    - Combines Target Applications into a single space-delimited string.
+    - Runs through clean_payload(..) before returning.
+    """
+
+    if not isinstance(package_out, dict):
+        raise ValueError("package_out must be a dict")
+
+    et = (edit_type or "").strip().lower()
+    if et not in ("adds", "updates"):
+        raise ValueError("manage_deployment supports only 'adds' or 'updates'")
+
+    # Copy source-of-truth attributes
+    attrs = dict(package_out)
+
+    # -----------------------------
+    # OBJECTID handling (updates)
+    # -----------------------------
+    if et == "updates":
+        oid = (
+            attrs.pop("objectid", None)
+            or attrs.pop("OBJECTID", None)
+            or attrs.pop("objectId", None)
+        )
+        if oid is None:
+            raise ValueError("UPDATE requires a valid OBJECTID")
+
+        # AGOL requires uppercase OBJECTID
+        attrs["OBJECTID"] = oid
+
+    # ------------------------------------
+    # Target Applications normalization
+    # ------------------------------------
+    target_apps_key = "target_applications"
+
+    if target_apps_key in attrs:
+        val = attrs[target_apps_key]
+
+        if val is None:
+            attrs[target_apps_key] = ""
+
+        elif isinstance(val, (list, tuple, set)):
+            # Combine into a single string with spaces between values
+            attrs[target_apps_key] = ", ".join(
+                str(v).strip() for v in val if v not in (None, "")
+            )
+
+        else:
+            # Ensure scalar values are strings
+            attrs[target_apps_key] = str(val).strip()
+
+    # -----------------------------
+    # Return applyEdits payload
+    # -----------------------------
+    if et == "updates":
+        payload = {"updates": [{"attributes": attrs}]}
+        return clean_payload(payload, "updates")
+
+    payload = {"adds": [{"attributes": attrs}]}
+    return clean_payload(payload, "adds")

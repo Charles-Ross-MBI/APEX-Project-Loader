@@ -216,7 +216,7 @@ def init_session_state():
             "2029",
             "2030"
         ],
-        'deployment_status_vals' : [
+        'database_status_vals' : [
             "",
             'Review:  Awaiting Review',
             'Review: Review in Progress',

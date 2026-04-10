@@ -317,21 +317,118 @@ def run_manager_app():
     projects_url = st.session_state.get("apex_url")
     projects_layer = st.session_state.get('projects_layer')
 
+    # Cache the project list so filtering doesn't trigger additional AGOL requests on reruns.
+    def _get_projects_cache():
+        cache_key = "_manager_projects_cache"
+        meta_key = "_manager_projects_cache_meta"
+        meta = (projects_url, projects_layer)
+
+        if st.session_state.get(meta_key) != meta or cache_key not in st.session_state:
+            try:
+                st.session_state[cache_key] = get_multiple_fields(
+                    projects_url,
+                    projects_layer,
+                    ["Proj_Name", "globalid", "Construction_Year"]
+                )
+            except Exception as e:
+                st.error(f"Failed to load project list: {e}")
+                st.session_state[cache_key] = []
+            st.session_state[meta_key] = meta
+
+        return st.session_state.get(cache_key) or []
+
+    # Build a quick lookup helper for comparing GlobalIDs consistently.
+    def _gid_matches(gid_value, guid_value):
+        if gid_value is None or guid_value is None:
+            return False
+        try:
+            return str(gid_value).lower() == str(guid_value).lower()
+        except Exception:
+            return False
+
     if show_list:
         if not projects_url or projects_layer is None:
             st.error("Missing `apex_url` and/or `projects_layer` in session state. Initialize app session before opening Manager.")
             return
-        try:
-            projects = get_multiple_fields(projects_url, projects_layer, ["Proj_Name", "globalid"])
-        except Exception as e:
-            st.error(f"Failed to load project list: {e}")
-            projects = []
 
-        label_to_gid = {
-            p.get("Proj_Name"): p.get("globalid")
-            for p in projects
-            if p.get("Proj_Name") and p.get("globalid")
-        }
+        projects = _get_projects_cache()
+
+        # --- Construction Year filter (uses already-pulled data; no refetch) ---
+        year_placeholder = "— All Construction Years —"
+
+        def _normalize_year(v):
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s if s else None
+
+        def _year_sort_key(v):
+            # Prefer numeric sort when possible (e.g., 2024 < 2025)
+            try:
+                return (0, int(v))
+            except Exception:
+                return (1, v)
+
+        years = sorted(
+            {
+                _normalize_year(p.get("Construction_Year"))
+                for p in projects
+                if _normalize_year(p.get("Construction_Year")) is not None
+            },
+            key=_year_sort_key
+        )
+
+        year_options = [year_placeholder] + years
+
+        # Default the filter from session_state.set_year (if provided); otherwise no selection.
+        if "construction_year_filter" not in st.session_state:
+            sy = _normalize_year(st.session_state.get("set_year"))
+            st.session_state["construction_year_filter"] = sy if sy in years else year_placeholder
+
+        def _on_year_filter_change():
+            # Reset project selector so the placeholder shows again after filtering.
+            st.session_state["project_selector"] = placeholder_label
+            st.session_state["guid"] = None
+            st.session_state["project_record"] = None
+            st.session_state["objectid"] = None
+        
+        st.markdown("<h5>SELECT AN APEX PROJECT</h5>", unsafe_allow_html=True)
+
+        st.selectbox(
+            "Construction Year",
+            year_options,
+            key="construction_year_filter",
+            on_change=_on_year_filter_change
+        )
+
+        selected_year = st.session_state.get("construction_year_filter")
+        selected_year = None if selected_year == year_placeholder else selected_year
+
+        if selected_year:
+            filtered_projects = [
+                p for p in projects
+                if _normalize_year(p.get("Construction_Year")) == selected_year
+            ]
+        else:
+            filtered_projects = projects
+
+        # Build labels like "(CONSTRUCTION_YEAR) - NAME OF PROJECT"
+        label_to_gid = {}
+        for p in filtered_projects:
+            name = p.get("Proj_Name")
+            gid = p.get("globalid")
+            if not name or gid is None:
+                continue
+
+            y = _normalize_year(p.get("Construction_Year")) or "—"
+            label = f"[{y}] - {name}"
+
+            # Disambiguate duplicate labels if needed.
+            if label in label_to_gid and str(label_to_gid[label]).lower() != str(gid).lower():
+                label = f"{label} [{str(gid)[:8]}]"
+
+            label_to_gid[label] = gid
+
         labels = sorted(label_to_gid.keys())
         labels_with_placeholder = [placeholder_label] + labels
 
@@ -348,9 +445,8 @@ def run_manager_app():
             st.session_state["guid"] = None
             st.session_state["project_record"] = None
             st.session_state["objectid"] = None
-
+            
     if show_list:
-        st.markdown("<h5>SELECT AN APEX PROJECT</h5>", unsafe_allow_html=True)
         st.selectbox(
             "Select a project",
             labels_with_placeholder,
@@ -366,19 +462,12 @@ def run_manager_app():
         current_label = None
         if projects_url and projects_layer is not None:
             try:
-                if not label_to_gid:
-                    projects = get_multiple_fields(projects_url, projects_layer, ["Proj_Name", "globalid"])
-                    label_to_gid = {
-                        p.get("Proj_Name"): p.get("globalid")
-                        for p in projects
-                        if p.get("Proj_Name") and p.get("globalid")
-                    }
+                projects = _get_projects_cache()
                 guid = st.session_state.get("guid")
                 if guid:
-                    current_label = next(
-                        (label for label, gid in label_to_gid.items() if gid == guid or str(gid).lower() == guid),
-                        None
-                    )
+                    rec = next((p for p in projects if _gid_matches(p.get("globalid"), guid)), None)
+                    if rec:
+                        current_label = f"{rec.get('Proj_Name')} [{rec.get('Construction_Year')}]"
             except Exception:
                 current_label = None
 
