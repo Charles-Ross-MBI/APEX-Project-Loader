@@ -57,6 +57,7 @@ Notes:
 
 import streamlit as st
 from shapely.geometry import LineString, Point, Polygon
+from typing import Any, Dict, List, Optional, Iterable
 import datetime
 from agol.agol_util import (
     select_record, 
@@ -1337,8 +1338,6 @@ def manage_project_name_update(
 
 
 
-
-
 def manage_deployment_payload(package_out: dict, edit_type: str) -> dict:
     """
     Build an AGOL applyEdits payload for the Project Deployment layer.
@@ -1404,3 +1403,135 @@ def manage_deployment_payload(package_out: dict, edit_type: str) -> dict:
 
     payload = {"adds": [{"attributes": attrs}]}
     return clean_payload(payload, "adds")
+
+
+
+
+
+def manage_footprint_project_payload(objectid):
+    try:
+        # Determine center based on selected geometry
+        if st.session_state.get("selected_point"):
+            proj_type = "Site"
+            geoms = st.session_state['selected_point']
+            geom_type = 'point'
+        elif st.session_state.get("selected_route"):
+            proj_type = "Route"
+            geoms = st.session_state['selected_route']
+            geom_type = 'line'
+        elif st.session_state.get("selected_boundary"):
+            proj_type = "Boundary"
+            geoms = st.session_state['selected_boundary']
+            geom_type = 'polygon'
+
+        if not geoms or not isinstance(geoms, (list, tuple)):
+            raise RuntimeError("No project geometries available in session.")
+
+        # --- Create buffers (fixed distances by kind) ---
+        buffer = create_buffers(geometry_list=geoms, geom_type=geom_type, distance_m=.01)
+    
+        if not buffer:
+            raise RuntimeError("Buffering produced no output (check geometry and distances).")
+
+        # --- ESRI Polygon geometry (multipart via rings) ---
+        esri_polygon = {
+            "rings": buffer,  # list of rings (each is [[lon, lat], ...])
+            "spatialReference": {"wkid": 4326},
+        }
+
+        # >>> NEW: expose this polygon for Traffic Impact fallback use <<<
+        st.session_state["project_esri_polygon"] = esri_polygon
+
+        # Build payload with .get() and default None
+        payload = {
+            "updates": [
+                {
+                    "attributes": {
+                        'OBJECTID':objectid,
+                        "Proj_Type": proj_type,
+                        "List_DOT_PF_Region": st.session_state.get("region_string", None),
+                        "List_Borough_Census_Area": st.session_state.get("borough_string", None),
+                        "List_Senate_District": st.session_state.get("senate_string", None),
+                        "List_House_District": st.session_state.get("house_string", None),
+                        "Database_Status": "Review: Awaiting Review"
+                    },
+                    "geometry": esri_polygon
+                }
+            ]
+        }
+        return clean_payload(payload, 'updates')
+        
+    except Exception as e:
+        # Bubble up error so caller can handle with st.error
+        raise RuntimeError(f"Error building project payload: {e}")
+    
+
+
+
+
+def manage_footprint_deletes_payload(objectids: Any) -> Dict[str, List[int]]:
+    """
+    Craft an AGOL applyEdits deletes payload from a list (or single) OBJECTID(s).
+
+    Returns:
+        {"deletes": [<int>, <int>, ...]}
+
+    Notes:
+      - Accepts: None, int, str-int, list/tuple/set of ints/str-ints
+      - Filters: None/blank/invalid values
+      - Dedupes while preserving original order
+    """
+    if objectids is None:
+        return {"deletes": []}
+
+    # Normalize to an iterable of candidate values
+    if isinstance(objectids, (int,)):
+        candidates = [objectids]
+    elif isinstance(objectids, str):
+        s = objectids.strip()
+        if not s:
+            return {"deletes": []}
+        # If caller passed a comma-separated string, support it
+        if "," in s:
+            candidates = [p.strip() for p in s.split(",")]
+        else:
+            candidates = [s]
+    elif isinstance(objectids, (list, tuple, set)):
+        candidates = list(objectids)
+    else:
+        # Unknown type: best effort wrap
+        candidates = [objectids]
+
+    deletes: List[int] = []
+    seen = set()
+
+    for val in candidates:
+        if val is None:
+            continue
+        if isinstance(val, str):
+            v = val.strip()
+            if not v:
+                continue
+            # allow numeric strings
+            try:
+                oid = int(v)
+            except Exception:
+                continue
+        else:
+            try:
+                oid = int(val)
+            except Exception:
+                continue
+
+        if oid in seen:
+            continue
+        seen.add(oid)
+        deletes.append(oid)
+
+    return {"deletes": deletes}
+
+
+
+
+
+

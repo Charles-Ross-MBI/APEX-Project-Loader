@@ -253,12 +253,12 @@ def load_project_apex() -> None:
 
         if failed_layers:
             st.error(
-                "LOAD GEOGRAPHIES: FAILURE ❌\n"
+                "LOAD LEGISLATIVE AND ADMINISTRATIVE BOUNDARIES: FAILURE ❌\n"
                 f"Failed layers: {', '.join(failed_layers)}\n"
                 f"Messages: {', '.join(fail_messages)}"
             )
         else:
-            st.success("LOAD GEOGRAPHIES: SUCCESS ✅")
+            st.success("LOAD LEGISLATIVE AND ADMINISTRATIVE BOUNDARIES: SUCCESS ✅")
 
         # -------------------------------------------------------------------------
         # STEP 4 (SILENT): LOCATION UPDATE

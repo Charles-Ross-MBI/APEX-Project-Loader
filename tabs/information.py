@@ -540,22 +540,28 @@ def _on_update_information(is_awp):
                                                    package_out = project_name_package, 
                                                    edit_type='updates')
 
+    # Build Locations Payload
+    locations_layer = st.session_state['locations_layer']
+    locations_payload = manage_project_name_update(st.session_state['apex_url'],
+                                                   layer = locations_layer,
+                                                   id_field = 'parentglobalid',
+                                                   guid = st.session_state['apex_guid'],
+                                                   package_out = project_name_package, 
+                                                   edit_type='updates')
+
     # --- Progress placeholder is stored by the UI section right under the buttons ---
     progress_ph = st.session_state.get("info_progress_placeholder")
 
     # === actually deploy to AGOL with in-place progress updates ===
-    result = deploy_to_agol_information(payload, footprint_layer, footprint_payload, traffic_impact_payload, "updates", progress_placeholder=progress_ph)
+    result = deploy_to_agol_information(payload, footprint_layer, footprint_payload, traffic_impact_payload, locations_layer, locations_payload, "updates", progress_placeholder=progress_ph)
 
     # Clear the progress bar after completion (success or failure)
     try:
         if progress_ph is not None:
             progress_ph.empty()
     except Exception:
-        # If Streamlit already cleared/invalidated the placeholder on rerun, ignore
         pass
 
-    # ✅ After a successful AGOL update, revert back to project-record display mode
-    # and rerun the app so the tab reloads from the updated record.
     if isinstance(result, dict) and result.get("success") is True:
         _reset_information_form_state_after_update()
 
@@ -567,6 +573,8 @@ def deploy_to_agol_information(
     footprint_layer: int,
     footprint_payload: Dict[str, Any],
     traffic_impacts_payload: Dict[str, Any],
+    locations_layer: int,
+    locations_payload: Dict[str, Any],
     edit_type: str,
     *,
     progress_placeholder: Optional[st.delta_generator.DeltaGenerator] = None,
@@ -576,6 +584,7 @@ def deploy_to_agol_information(
       1) Project Information
       2) Footprint layer (already resolved numeric layer index)
       3) Traffic Impacts layer
+      4) Locations layer
 
     - Supports ONLY 'updates'
     - Normalizes OBJECTID casing as needed
@@ -634,6 +643,7 @@ def deploy_to_agol_information(
                 "project": project_result,
                 "footprint": None,
                 "traffic_impacts": None,
+                "locations": None,
             }
 
         # ----------------------------
@@ -654,6 +664,7 @@ def deploy_to_agol_information(
                     "project": project_result,
                     "footprint": None,
                     "traffic_impacts": None,
+                    "locations": None,
                 }
 
             _progress(0.6, "Updating Footprint Layer…")
@@ -669,6 +680,7 @@ def deploy_to_agol_information(
                     "project": project_result,
                     "footprint": footprint_result,
                     "traffic_impacts": None,
+                    "locations": None,
                 }
 
         # ----------------------------
@@ -690,6 +702,7 @@ def deploy_to_agol_information(
                     "project": project_result,
                     "footprint": footprint_result,
                     "traffic_impact": None,
+                    "locations": None,
                 }
 
             _progress(0.85, "Updating Traffic Impacts Layer…")
@@ -710,6 +723,46 @@ def deploy_to_agol_information(
                     "project": project_result,
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
+                    "locations": None,
+                }
+
+        # ----------------------------
+        # 4) Locations Layer
+        # ----------------------------
+        locations_result = None
+
+        if locations_payload.get("updates"):
+            err = _reject_non_updates(locations_payload, "Locations")
+            if err:
+                err["project"] = project_result
+                err["footprint"] = footprint_result
+                err["traffic_impacts"] = traffic_impacts_result
+                return err
+
+            if locations_layer is None:
+                return {
+                    "success": False,
+                    "message": "Locations layer not configured",
+                    "project": project_result,
+                    "footprint": footprint_result,
+                    "traffic_impacts": traffic_impacts_result,
+                    "locations": None,
+                }
+
+            _progress(0.95, "Updating Locations Layer…")
+
+            _normalize_objectid_updates(locations_payload)
+            locations_loader = AGOLDataLoader(base_url, locations_layer)
+            locations_result = locations_loader.update_features(locations_payload)
+
+            if locations_result.get("success") is False:
+                return {
+                    "success": False,
+                    "message": "Locations update failed",
+                    "project": project_result,
+                    "footprint": footprint_result,
+                    "traffic_impacts": traffic_impacts_result,
+                    "locations": locations_result,
                 }
 
         _progress(1.0, "Done")
@@ -719,6 +772,7 @@ def deploy_to_agol_information(
             "project": project_result,
             "footprint": footprint_result,
             "traffic_impacts": traffic_impacts_result,
+            "locations": locations_result,
         }
 
     except Exception as e:
@@ -728,8 +782,8 @@ def deploy_to_agol_information(
             "project": None,
             "footprint": None,
             "traffic_impacts": None,
+            "locations": None,
         }
-
 
 
 

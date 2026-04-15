@@ -583,7 +583,7 @@ def render_geographies_expander(*, show_routes: bool = False) -> None:
     borough_val = st.session_state.get("borough_string")
     region_val = st.session_state.get("region_string")
 
-    with st.expander("**PROJECT GEOGRAPHIES**", expanded=True):
+    with st.expander("**LEGISLATIVE AND ADMINISTRATIVE BOUNDARIES**", expanded=True):
         col1, col2 = st.columns(2)
         col1.markdown(f"**House Districts:** {house_val or '—'}")
         col2.markdown(f"**Senate Districts:** {senate_val or '—'}")
