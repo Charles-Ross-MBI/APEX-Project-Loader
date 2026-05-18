@@ -659,6 +659,7 @@ def deploy_to_agol_information(
       2) Footprint layer (already resolved numeric layer index)
       3) Traffic Impacts layer
       4) Locations layer
+      5) Flagged AWP update (optional)
 
     - Supports ONLY 'updates'
     - Normalizes OBJECTID casing as needed
@@ -690,6 +691,8 @@ def deploy_to_agol_information(
             attrs = rec.get("attributes", {})
             if "OBJECTID" not in attrs and "objectId" in attrs:
                 attrs["OBJECTID"] = attrs.pop("objectId")
+            elif "OBJECTID" not in attrs and "objectid" in attrs:
+                attrs["OBJECTID"] = attrs.pop("objectid")
 
     def _reject_non_updates(p: Dict[str, Any], label: str) -> Optional[Dict[str, Any]]:
         if p.get("adds"):
@@ -697,6 +700,28 @@ def deploy_to_agol_information(
         if p.get("deletes"):
             return {"success": False, "message": f"{label} payload contains deletes"}
         return None
+
+    def _as_bool(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if value is None:
+            return False
+        if isinstance(value, (int, float)):
+            return value != 0
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "y", "on"}
+        return bool(value)
+
+    def _coerce_objectid(value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            value = value.strip()
+            if value == "":
+                return None
+            if value.isdigit():
+                return int(value)
+        return value
 
     _progress(0.0, "Submitting updates to AGOL…")
 
@@ -718,6 +743,7 @@ def deploy_to_agol_information(
                 "footprint": None,
                 "traffic_impacts": None,
                 "locations": None,
+                "flagged_awp": None,
             }
 
         # ----------------------------
@@ -729,6 +755,10 @@ def deploy_to_agol_information(
             err = _reject_non_updates(footprint_payload, "Footprint")
             if err:
                 err["project"] = project_result
+                err["footprint"] = None
+                err["traffic_impacts"] = None
+                err["locations"] = None
+                err["flagged_awp"] = None
                 return err
 
             if footprint_layer is None:
@@ -739,6 +769,7 @@ def deploy_to_agol_information(
                     "footprint": None,
                     "traffic_impacts": None,
                     "locations": None,
+                    "flagged_awp": None,
                 }
 
             _progress(0.6, "Updating Footprint Layer…")
@@ -755,6 +786,7 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": None,
                     "locations": None,
+                    "flagged_awp": None,
                 }
 
         # ----------------------------
@@ -767,6 +799,9 @@ def deploy_to_agol_information(
             if err:
                 err["project"] = project_result
                 err["footprint"] = footprint_result
+                err["traffic_impacts"] = None
+                err["locations"] = None
+                err["flagged_awp"] = None
                 return err
 
             if not traffic_impact_url or traffic_impacts_layer is None:
@@ -775,8 +810,9 @@ def deploy_to_agol_information(
                     "message": "Traffic Impacts layer not configured",
                     "project": project_result,
                     "footprint": footprint_result,
-                    "traffic_impact": None,
+                    "traffic_impacts": None,
                     "locations": None,
+                    "flagged_awp": None,
                 }
 
             _progress(0.85, "Updating Traffic Impacts Layer…")
@@ -798,6 +834,7 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
                     "locations": None,
+                    "flagged_awp": None,
                 }
 
         # ----------------------------
@@ -811,6 +848,8 @@ def deploy_to_agol_information(
                 err["project"] = project_result
                 err["footprint"] = footprint_result
                 err["traffic_impacts"] = traffic_impacts_result
+                err["locations"] = None
+                err["flagged_awp"] = None
                 return err
 
             if locations_layer is None:
@@ -821,6 +860,7 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
                     "locations": None,
+                    "flagged_awp": None,
                 }
 
             _progress(0.95, "Updating Locations Layer…")
@@ -837,17 +877,20 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
                     "locations": locations_result,
+                    "flagged_awp": None,
                 }
 
         # ----------------------------
         # 5) Flagged AWP Update
         # ----------------------------
-        
-        if st.session_state.get("flagged_awp_update") is True:
-            flagged_objectid = st.session_state.get("flagged_objectid")
+        flagged_awp_result = None
+        flagged_awp_requested = _as_bool(st.session_state.get("flagged_awp_update"))
+
+        if flagged_awp_requested:
+            flagged_objectid = _coerce_objectid(st.session_state.get("flagged_objectid"))
             traffic_form_url = st.session_state.get("traffic_form_url")
-            traffic_form_layer = st.seesion_state.get('traffic_form_layer')
-    
+            traffic_form_layer = st.session_state.get("traffic_form_layer")
+
             if flagged_objectid is None:
                 return {
                     "success": False,
@@ -856,6 +899,7 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
                     "locations": locations_result,
+                    "flagged_awp": None,
                 }
 
             if not traffic_form_url or traffic_form_layer is None:
@@ -866,17 +910,19 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
                     "locations": locations_result,
+                    "flagged_awp": None,
                 }
 
-            from datetime import date
+            from datetime import datetime, timezone
 
+            # AGOL Date fields usually expect epoch milliseconds
             flagged_awp_payload = {
                 "updates": [
                     {
                         "attributes": {
                             "OBJECTID": flagged_objectid,
                             "AWP_Update_Flag": "No",
-                            "AWP_Update_Timestamp": date.today().strftime("%Y-%m-%d"),
+                            "AWP_Update_Timestamp": int(datetime.now(timezone.utc).timestamp() * 1000),
                             "AWP_Update_Status": "Complete",
                         }
                     }
@@ -900,6 +946,7 @@ def deploy_to_agol_information(
                     "footprint": footprint_result,
                     "traffic_impacts": traffic_impacts_result,
                     "locations": locations_result,
+                    "flagged_awp": flagged_awp_result,
                 }
 
         _progress(1.0, "Done")
@@ -910,6 +957,7 @@ def deploy_to_agol_information(
             "footprint": footprint_result,
             "traffic_impacts": traffic_impacts_result,
             "locations": locations_result,
+            "flagged_awp": flagged_awp_result,
         }
 
     except Exception as e:
@@ -920,6 +968,7 @@ def deploy_to_agol_information(
             "footprint": None,
             "traffic_impacts": None,
             "locations": None,
+            "flagged_awp": None,
         }
 
 
