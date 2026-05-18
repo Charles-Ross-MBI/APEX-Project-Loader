@@ -90,6 +90,8 @@ def init_session_state():
         "apex_awp_id": None,
         "apex_object_id": None,
         "ti_guid": None,
+        "flagged_awp_update": False,
+        "flagged_objectid": None
     }
 
     # Read query params (new + old API)
@@ -244,11 +246,16 @@ def init_session_state():
     agol_urls = {
         'apex_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/APEX_PROJECTS_LOADER_APPLICATION/FeatureServer",
         'traffic_impact_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/TRAFFIC_IMPACT_EVENTS_LOADER_APPLICATION/FeatureServer",
+        'traffic_form_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/service_885f75157e3042f2bf3c1cfec1a8094e/FeatureServer",
         "aashtoware_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AWP_to_APEX_TRAFFIC_IMPACTS_LOADER/FeatureServer",
         "milepoints_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Pavement_Condition_Data_Tenth_Mile_2024/FeatureServer",
         "mileposts_url": "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/AKDOTPF_Route_Data/FeatureServer",
         'communities_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/""All_Alaska_Communities_Baker/FeatureServer",
         'apex_contacts_url': "https://services.arcgis.com/r4A0V7UzH9fcLVvv/arcgis/rest/services/Traffic_Impact_Assignees/FeatureServer"
+    }
+
+    form_layers = {
+        'traffic_form_layer': 0
     }
 
     aashtoware_layers = {
@@ -316,6 +323,8 @@ def init_session_state():
     for key, value in apex_layers.items():
         st.session_state.setdefault(key, value)
     for key, value in traffic_impact_layers.items():
+        st.session_state.setdefault(key, value)
+    for key, value in form_layers.items():
         st.session_state.setdefault(key, value)
     for key, value in aashtoware_layers.items():
         st.session_state.setdefault(key, value)

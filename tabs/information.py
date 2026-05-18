@@ -244,6 +244,7 @@ def _build_information_package(is_awp) -> dict:
             #9. AWP ID
             "awp_contract_id": st.session_state.get("awp_id")
         }
+    
 
     elif is_awp == False:
         return {
@@ -442,6 +443,79 @@ def _load_awp_by_contract_id_and_switch():
         # Force a rerun to immediately render the updated AWP-backed form
         st.rerun()
 
+
+def _on_remove_aashtoware_connection():
+    """Action for 'REMOVE CONNECTION' button.
+
+    Removes the AASHTOWare linkage from the active AGOL project record by
+    clearing AWP_Contract_ID (via manage_information_payload mapping).
+
+    On completion, the script will rerun just like UPDATE INFORMATION (Streamlit callback rerun).
+    """
+    project = _get_project_record() or {}
+
+    base_url = st.session_state.get("apex_url")
+    projects_layer_idx = st.session_state.get("projects_layer")
+
+    # Resolve OBJECTID for applyEdits updates
+    objectid = (
+        st.session_state.get("apex_object_id")
+        or project.get("OBJECTID")
+        or project.get("objectid")
+        or project.get("objectId")
+    )
+
+    if not base_url or projects_layer_idx is None:
+        st.error("Unable to remove connection: missing AGOL base_url or projects_layer index.")
+        return
+
+    if not objectid:
+        st.error("Unable to remove connection: missing project OBJECTID.")
+        return
+
+    # Build a minimal update package that ONLY clears the AWP contract linkage
+    payload = {
+        "updates": [
+            {
+                "attributes": {
+                    "OBJECTID": objectid,
+                    "AWP_Contract_ID": None,
+                    "AWP_Proj_Name": None,
+                    "AWP_Proj_Desc": None
+                }
+            }
+        ]
+    }
+
+    # Normalize OBJECTID key for AGOL (mirror deploy_to_agol_information behavior)
+    for rec in (payload.get("updates") or []):
+        attrs = rec.get("attributes", {})
+        if "OBJECTID" not in attrs:
+            if "objectId" in attrs:
+                attrs["OBJECTID"] = attrs.pop("objectId")
+            elif "objectid" in attrs:
+                attrs["OBJECTID"] = attrs.pop("objectid")
+
+    # Submit to AGOL
+    try:
+        loader = AGOLDataLoader(base_url, projects_layer_idx)
+        result = loader.update_features(payload)
+    except Exception as e:
+        st.error(f"Remove connection failed: {e}")
+        return
+
+    if isinstance(result, dict) and result.get("success") is False:
+        st.error("Remove connection failed (AGOL returned success=False).")
+        st.session_state["info_remove_connection_result"] = result  # debug visibility
+        return
+
+    # Clear mode overrides so _resolve_is_awp() falls back to AGOL record logic
+    for k in (INFO_AWP_TRIGGER_KEY, "info_show_awp_selector", "details_type", "info_option", "is_awp"):
+        if k in st.session_state:
+            del st.session_state[k]
+
+    # Optional: bump version so the form rebuilds cleanly on next rerun
+    st.session_state["form_version"] = st.session_state.get("form_version", 0) + 1
 
 
 def _on_change_aashtoware_connection():
@@ -765,6 +839,70 @@ def deploy_to_agol_information(
                     "locations": locations_result,
                 }
 
+        # ----------------------------
+        # 5) Flagged AWP Update
+        # ----------------------------
+        if st.session_state.get("flagged_awp_update") is True:
+            flagged_objectid = st.session_state.get("flagged_objectid")
+            traffic_form_url = st.session_state.get("traffic_form_url")
+            traffir_form_layer = st.session_state.get("traffir_form_layer")
+            if traffir_form_layer is None:
+                traffir_form_layer = st.session_state.get("traffic_form_layer")
+
+            if flagged_objectid is None:
+                return {
+                    "success": False,
+                    "message": "Flagged AWP update requested but flagged_objectid is missing",
+                    "project": project_result,
+                    "footprint": footprint_result,
+                    "traffic_impacts": traffic_impacts_result,
+                    "locations": locations_result,
+                }
+
+            if not traffic_form_url or traffir_form_layer is None:
+                return {
+                    "success": False,
+                    "message": "Flagged AWP update requested but traffic form layer is not configured",
+                    "project": project_result,
+                    "footprint": footprint_result,
+                    "traffic_impacts": traffic_impacts_result,
+                    "locations": locations_result,
+                }
+
+            from datetime import date
+
+            flagged_awp_payload = {
+                "updates": [
+                    {
+                        "attributes": {
+                            "OBJECTID": flagged_objectid,
+                            "AWP_Update_Flag": "No",
+                            "AWP_Update_Timestamp": date.today().strftime("%Y-%m-%d"),
+                            "AWP_Update_Status": "Complete",
+                        }
+                    }
+                ]
+            }
+
+            _progress(0.98, "Updating flagged AWP record…")
+
+            _normalize_objectid_updates(flagged_awp_payload)
+            flagged_awp_loader = AGOLDataLoader(
+                traffic_form_url,
+                traffir_form_layer,
+            )
+            flagged_awp_result = flagged_awp_loader.update_features(flagged_awp_payload)
+
+            if flagged_awp_result.get("success") is False:
+                return {
+                    "success": False,
+                    "message": "Flagged AWP update failed",
+                    "project": project_result,
+                    "footprint": footprint_result,
+                    "traffic_impacts": traffic_impacts_result,
+                    "locations": locations_result,
+                }
+
         _progress(1.0, "Done")
 
         return {
@@ -784,6 +922,7 @@ def deploy_to_agol_information(
             "traffic_impacts": None,
             "locations": None,
         }
+
 
 
 
@@ -911,21 +1050,26 @@ def manage_information():
                         fmt_agol_date(project.get("EditDate")),
                     )
 
-            # The two source buttons (pressing either flips to the AWP selector view)
-            source_buttons = st.container(border=False)
-            with source_buttons:
-                if is_awp:
+            if is_awp:
+                col_src1, col_src2 = st.columns(2, gap="small")
+                with col_src1:
                     st.button(
-                        "CHANGE AASHTOWARE CONNECTION",
+                        "RE-CONNECT/CHANGE CONNECTION",
                         use_container_width=True,
                         on_click=_on_change_aashtoware_connection,
                     )
-                else:
+                with col_src2:
                     st.button(
-                        "CONNECT TO AASHTOWARE PROJECT",
+                        "REMOVE CONNECTION",
                         use_container_width=True,
-                        on_click=_on_connect_to_aashtoware_project,
+                        on_click=_on_remove_aashtoware_connection,
                     )
+            else:
+                st.button(
+                    "CONNECT TO AASHTOWARE PROJECT",
+                    use_container_width=True,
+                    on_click=_on_connect_to_aashtoware_project,
+                )
 
     st.write("")
 

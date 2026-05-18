@@ -1162,11 +1162,7 @@ def manage_information_payload(package_out: dict, edit_type: str) -> dict:
     # Copy source-of-truth attributes
     attrs = dict(package_out)
 
-    # ------------------------------------
-    # Force database status
-    # ------------------------------------
-    attrs["database_status"] = "Review: Awaiting Review"
-
+    
     # -----------------------------
     # OBJECTID handling (updates)
     # -----------------------------
@@ -1452,8 +1448,7 @@ def manage_footprint_project_payload(objectid):
                         "List_DOT_PF_Region": st.session_state.get("region_string", None),
                         "List_Borough_Census_Area": st.session_state.get("borough_string", None),
                         "List_Senate_District": st.session_state.get("senate_string", None),
-                        "List_House_District": st.session_state.get("house_string", None),
-                        "Database_Status": "Review: Awaiting Review"
+                        "List_House_District": st.session_state.get("house_string", None)
                     },
                     "geometry": esri_polygon
                 }

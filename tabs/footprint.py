@@ -618,7 +618,7 @@ def deploy_to_agol_footprint_update(
     results: Dict[str, Any] = {"success": False, "stages": {}}
 
     # 1) Update Project
-    _progress(0.10, "Stage 1/7: Updating project…")
+    _progress(0.10, "Updating project…")
     r_project = _update_with_loader(projects_layer, project_payload)
     results["stages"]["project_update"] = r_project
     if not r_project.get("success"):
@@ -627,7 +627,7 @@ def deploy_to_agol_footprint_update(
         return results
 
     # 2) Delete old footprint
-    _progress(0.25, "Stage 2/7: Deleting old footprint records…")
+    _progress(0.25, "Deleting old footprint records…")
     r_fp_del = _delete_with_loader(old_footprint_layer, old_footprint_delete_payload)
     results["stages"]["old_footprint_deletes"] = r_fp_del
     if not r_fp_del.get("success"):
@@ -636,7 +636,7 @@ def deploy_to_agol_footprint_update(
         return results
 
     # 3) Delete old locations
-    _progress(0.35, "Stage 3/7: Deleting old locations records…")
+    _progress(0.35, "Deleting old locations records…")
     r_loc_del = _delete_with_loader(locations_layer, locations_delete_payload)
     results["stages"]["locations_deletes"] = r_loc_del
     if not r_loc_del.get("success"):
@@ -645,7 +645,7 @@ def deploy_to_agol_footprint_update(
         return results
 
     # 4) Delete geography
-    _progress(0.45, "Stage 4/7: Deleting old geography records…")
+    _progress(0.45, "Deleting old geography records…")
     geo_layer_map = {
         "house": st.session_state.get("house_layer"),
         "senate": st.session_state.get("senate_layer"),
@@ -666,7 +666,7 @@ def deploy_to_agol_footprint_update(
     results["stages"]["geography_deletes"] = geo_del_results
 
     # 5) Add locations
-    _progress(0.60, "Stage 5/7: Adding new locations records…")
+    _progress(0.60, "Adding new locations records…")
     r_loc_add = _add_with_loader(locations_layer, new_locations_add_payload)
     results["stages"]["locations_adds"] = r_loc_add
     if not r_loc_add.get("success"):
@@ -675,7 +675,7 @@ def deploy_to_agol_footprint_update(
         return results
 
     # 6) Add footprint
-    _progress(0.75, "Stage 6/7: Adding new footprint geometry…")
+    _progress(0.75, "Adding new footprint geometry…")
     r_fp_add = _add_with_loader(new_footprint_layer, new_footprint_add_payload)
     results["stages"]["new_footprint_adds"] = r_fp_add
     if not r_fp_add.get("success"):
@@ -684,7 +684,7 @@ def deploy_to_agol_footprint_update(
         return results
 
     # 7) Add geography
-    _progress(0.90, "Stage 7/7: Adding new geography records…")
+    _progress(0.90, "Adding new geography records…")
     geo_add_results: Dict[str, Any] = {}
     for name, layer in geo_layer_map.items():
         payload = (geo_add_payloads or {}).get(name) or {}
