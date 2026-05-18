@@ -843,6 +843,7 @@ def deploy_to_agol_information(
         # 5) Flagged AWP Update
         # ----------------------------
         if st.session_state.get("flagged_awp_update") is True:
+            st.markdown("FLAG SET TO TRUE")
             flagged_objectid = st.session_state.get("flagged_objectid")
             traffic_form_url = st.session_state.get("traffic_form_url")
             traffir_form_layer = st.session_state.get("traffir_form_layer")
