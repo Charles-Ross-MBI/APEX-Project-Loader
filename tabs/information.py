@@ -1075,6 +1075,7 @@ def manage_information():
 
     st.write("")
     st.markdown(st.session_state.get("flagged_awp_update"))
+    st.markdown(st.session_state.get("flagged_objectid"))
 
     # =========================================================================
     # PROJECT INFORMATION
