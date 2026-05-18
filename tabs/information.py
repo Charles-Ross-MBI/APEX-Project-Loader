@@ -844,13 +844,10 @@ def deploy_to_agol_information(
         # ----------------------------
         
         if st.session_state.get("flagged_awp_update") is True:
-            st.markdown("FLAG SET TO TRUE")
             flagged_objectid = st.session_state.get("flagged_objectid")
             traffic_form_url = st.session_state.get("traffic_form_url")
-            traffir_form_layer = st.session_state.get("traffir_form_layer")
-            if traffir_form_layer is None:
-                traffir_form_layer = st.session_state.get("traffic_form_layer")
-
+            traffic_form_layer = st.seesion_state.get('traffic_form_layer')
+    
             if flagged_objectid is None:
                 return {
                     "success": False,
@@ -861,7 +858,7 @@ def deploy_to_agol_information(
                     "locations": locations_result,
                 }
 
-            if not traffic_form_url or traffir_form_layer is None:
+            if not traffic_form_url or traffic_form_layer is None:
                 return {
                     "success": False,
                     "message": "Flagged AWP update requested but traffic form layer is not configured",
@@ -891,7 +888,7 @@ def deploy_to_agol_information(
             _normalize_objectid_updates(flagged_awp_payload)
             flagged_awp_loader = AGOLDataLoader(
                 traffic_form_url,
-                traffir_form_layer,
+                traffic_form_layer,
             )
             flagged_awp_result = flagged_awp_loader.update_features(flagged_awp_payload)
 
